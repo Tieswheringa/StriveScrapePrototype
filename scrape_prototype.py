@@ -239,18 +239,13 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
-                "--disable-setuid-sandbox",
-                "--single-process",
-                "--disable-software-rasterizer",
-                "--disable-extensions",
-                "--disable-background-networking",
-                "--disable-default-apps",
-                "--no-zygote",
-                "--memory-pressure-off",
-                "--disable-features=VizDisplayCompositor",
             ]
         )
         page = browser.new_page(viewport={"width": 1280, "height": 800})
+
+        page.on("crash", lambda: log("💥 Page crash gedetecteerd"))
+        page.on("close", lambda: log("📕 Page gesloten"))
+        browser.on("disconnected", lambda: log("🔌 Browser disconnected"))
 
         # ── Inloggen ──────────────────────────────────────────────────────────
         log("🔐 Inloggen op Striive...")
