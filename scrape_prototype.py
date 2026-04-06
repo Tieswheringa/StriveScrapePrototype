@@ -1,8 +1,28 @@
 import re
 import io
+import subprocess
+import sys
 import streamlit as st
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
+
+
+# ─── Playwright-browsers automatisch installeren indien nodig ─────────────────
+@st.cache_resource(show_spinner="Playwright-browsers installeren (eenmalig)...")
+def installeer_playwright():
+    """Installeert Chromium als dat nog niet aanwezig is. Wordt maar één keer uitgevoerd."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            capture_output=True, text=True, timeout=180
+        )
+        if result.returncode != 0:
+            return f"⚠️ Installatie-uitvoer:\n{result.stderr}"
+        return "✅ Playwright Chromium klaar."
+    except Exception as e:
+        return f"❌ Installatie mislukt: {e}"
+
+_playwright_status = installeer_playwright()
 
 
 # ─── Pagina-configuratie ───────────────────────────────────────────────────────
@@ -417,6 +437,11 @@ with st.sidebar:
     drempel = st.slider("Minimale score", min_value=50, max_value=95, value=80, step=5,
                         help="Alleen kandidaten boven deze score worden opgenomen.")
     st.markdown("---")
+    st.markdown("---")
+    if _playwright_status.startswith("✅"):
+        st.success(_playwright_status, icon="✅")
+    else:
+        st.error(_playwright_status)
     st.caption("v1.0 · In The Arena BV")
 
 # ─── Hoofd kolommen ───────────────────────────────────────────────────────────
