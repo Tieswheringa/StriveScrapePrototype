@@ -13,8 +13,8 @@ def installeer_playwright():
     """Installeert Chromium als dat nog niet aanwezig is. Wordt maar één keer uitgevoerd."""
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "chromium"],
-            capture_output=True, text=True, timeout=180
+            [sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"],
+            capture_output=True, text=True, timeout=300
         )
         if result.returncode != 0:
             return f"⚠️ Installatie-uitvoer:\n{result.stderr}"
@@ -231,22 +231,98 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
         log_fn(msg)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # --no-sandbox + --disable-dev-shm-usage zijn verplicht op Linux-servers
+        # (Streamlit Cloud, Docker, etc.) anders crasht Chromium of laadt pagina niet
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-setuid-sandbox",
+            ]
+        )
         page = browser.new_page()
 
         # ── Inloggen ──────────────────────────────────────────────────────────
         log("🔐 Inloggen op Striive...")
-        page.goto("https://login.striive.com/")
-        page.click('id=email')
-        page.keyboard.type(credentials["email"])
-        page.click('id=password')
-        page.keyboard.type(credentials["wachtwoord"])
-        page.click('button:has-text("Login")')
-        page.wait_for_selector('text=Overzicht', timeout=30000)
-        page.click('a:has-text("Opdrachten")')
+        page.goto("https://login.striive.com/", wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(3000)
+
+        # E-mailveld: probeer meerdere selectors
+        email_selectors = [
+            'input[type="email"]',
+            'input[name="email"]',
+            '#email',
+            'input[id="email"]',
+            'input[placeholder*="mail" i]',
+            'input[autocomplete="email"]',
+            'input[autocomplete="username"]',
+        ]
+        email_veld = None
+        for sel in email_selectors:
+            try:
+                el = page.locator(sel).first
+                el.wait_for(state="visible", timeout=5000)
+                email_veld = el
+                log(f"  ✔ E-mailveld gevonden: {sel}")
+                break
+            except:
+                continue
+
+        if email_veld is None:
+            page.screenshot(path="/tmp/debug_login.png", full_page=True)
+            raise Exception("E-mailveld niet gevonden. Screenshot opgeslagen in /tmp/debug_login.png")
+
+        email_veld.click()
+        email_veld.fill(credentials["email"])
+
+        # Wachtwoordveld
+        ww_veld = page.locator('input[type="password"]').first
+        ww_veld.wait_for(state="visible", timeout=10000)
+        ww_veld.click()
+        ww_veld.fill(credentials["wachtwoord"])
+
+        # Login-knop
+        login_selectors = [
+            'button:has-text("Login")',
+            'button:has-text("Inloggen")',
+            'button[type="submit"]',
+            'input[type="submit"]',
+        ]
+        for sel in login_selectors:
+            try:
+                knop = page.locator(sel).first
+                knop.wait_for(state="visible", timeout=4000)
+                knop.click()
+                log(f"  Login-knop geklikt ({sel}).")
+                break
+            except:
+                continue
+        else:
+            # Fallback: Enter indrukken
+            ww_veld.press("Enter")
+            log("  Login-knop niet gevonden, Enter gebruikt als fallback.")
+
+        # Wacht op succesvolle login
+        try:
+            page.wait_for_selector('text=Overzicht', timeout=30000)
+        except:
+            # Probeer alternatief dashboard-element
+            page.wait_for_url("**/dashboard**", timeout=30000)
+
+        log("✅ Ingelogd!")
+
+        # Navigeer naar Opdrachten
+        try:
+            page.click('a:has-text("Opdrachten")', timeout=10000)
+        except:
+            # Probeer via directe URL
+            page.goto("https://supplier.striive.com/job-requests")
+
         page.wait_for_selector('[data-testid="jobRequestListItem"]', timeout=30000)
         page.wait_for_timeout(2000)
-        log("✅ Ingelogd en opdrachtenpagina geladen.")
+        log("✅ Opdrachtenpagina geladen.")
 
         # ── Verzamel URLs ──────────────────────────────────────────────────────
         log("🔍 Alle opdracht-URLs verzamelen via scrollen...")
