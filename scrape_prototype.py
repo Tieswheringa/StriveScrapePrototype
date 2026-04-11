@@ -1,3 +1,4 @@
+import os
 import re
 import io
 import subprocess
@@ -6,23 +7,36 @@ import streamlit as st
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
 
-# ─── Playwright-browsers automatisch installeren indien nodig ─────────────────
 @st.cache_resource(show_spinner="Playwright-browsers installeren (eenmalig)...")
 def installeer_playwright():
-    """Installeert Chromium als dat nog niet aanwezig is. Wordt maar één keer uitgevoerd."""
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"],
-            capture_output=True, text=True, timeout=300
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            capture_output=True,
+            text=True,
+            timeout=300
         )
-        if result.returncode != 0:
-            return f"⚠️ Installatie-uitvoer:\n{result.stderr}"
-        return "✅ Playwright Chromium klaar."
+
+        return {
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
     except Exception as e:
-        return f"❌ Installatie mislukt: {e}"
+        return {
+            "returncode": 1,
+            "stdout": "",
+            "stderr": str(e),
+        }
 
 _playwright_status = installeer_playwright()
+
+if _playwright_status["returncode"] != 0:
+    st.error("Playwright browserinstallatie mislukt.")
+    st.code(_playwright_status["stderr"] or _playwright_status["stdout"])
+    st.stop()
 
 
 # ─── Pagina-configuratie ───────────────────────────────────────────────────────
