@@ -1,5 +1,7 @@
-streamlit>=1.35.0
+streamlit
 playwright==1.49.0
-openpyxl>=3.1.2
-pandas>=2.0.0
-matplotlib
+openpyxl
+pandas
+PyPDF2
+python-docx
+openai
