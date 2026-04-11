@@ -7,18 +7,22 @@ import streamlit as st
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+# Schrijfbare locatie op Streamlit Cloud
+PLAYWRIGHT_BROWSERS_DIR = "/tmp/pw-browsers"
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PLAYWRIGHT_BROWSERS_DIR
 
 @st.cache_resource(show_spinner="Playwright-browsers installeren (eenmalig)...")
 def installeer_playwright():
+    os.makedirs(PLAYWRIGHT_BROWSERS_DIR, exist_ok=True)
+
     try:
         result = subprocess.run(
             [sys.executable, "-m", "playwright", "install", "chromium"],
             capture_output=True,
             text=True,
-            timeout=300
+            timeout=300,
+            env={**os.environ, "PLAYWRIGHT_BROWSERS_PATH": PLAYWRIGHT_BROWSERS_DIR},
         )
-
         return {
             "returncode": result.returncode,
             "stdout": result.stdout,
@@ -34,11 +38,9 @@ def installeer_playwright():
 _playwright_status = installeer_playwright()
 
 if _playwright_status["returncode"] != 0:
-    st.error("Playwright browserinstallatie mislukt.")
+    st.error("Failed to install browsers")
     st.code(_playwright_status["stderr"] or _playwright_status["stdout"])
     st.stop()
-
-
 # ─── Pagina-configuratie ───────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Striive Matcher",
