@@ -533,10 +533,14 @@ with st.sidebar:
                         help="Alleen kandidaten boven deze score worden opgenomen.")
     st.markdown("---")
     st.markdown("---")
-    if _playwright_status.startswith("✅"):
-        st.success(_playwright_status, icon="✅")
+    if isinstance(_playwright_status, dict) and _playwright_status.get("returncode") == 0:
+        st.success("✅ Playwright Chromium klaar.", icon="✅")
     else:
-        st.error(_playwright_status)
+        st.error("❌ Playwright-installatie mislukt.")
+        if isinstance(_playwright_status, dict):
+            st.code(_playwright_status.get("stderr") or _playwright_status.get("stdout") or "Onbekende fout")
+        else:
+            st.code(str(_playwright_status))
     st.caption("v1.0 · In The Arena BV")
 
 # ─── Hoofd kolommen ───────────────────────────────────────────────────────────
