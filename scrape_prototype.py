@@ -353,7 +353,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
         while geen_nieuw < max_geen_nieuw:
             items = page.locator('[data-testid="jobRequestListItem"]').all()
             voor = len(gevonden_set)
-            tem in items:
+            for item in items:
                 try:
                     href = item.get_attribute('href') or item.locator('a').first.get_attribute('href')
                     if href and href not in gevonden_set:
