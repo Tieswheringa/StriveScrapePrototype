@@ -218,7 +218,7 @@ def maak_excel(matches: list) -> bytes:
         cell.alignment = Alignment(horizontal="center")
 
     breedte = [12, 25, 10, 15, 18, 18, 50]
-    for i, b in enumerate(breedte, 1):
+    , b in enumerate(breedte, 1):
         ws.column_dimensions[ws.cell(1, i).column_letter].width = b
 
     for r, m in enumerate(matches, 2):
@@ -353,7 +353,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
         while geen_nieuw < max_geen_nieuw:
             items = page.locator('[data-testid="jobRequestListItem"]').all()
             voor = len(gevonden_set)
-            for item in items:
+            tem in items:
                 try:
                     href = item.get_attribute('href') or item.locator('a').first.get_attribute('href')
                     if href and href not in gevonden_set:
@@ -391,7 +391,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
 
         alle_matches = []
 
-        for i, url in enumerate(alle_urls[:1]):
+        for i, url in enumerate(alle_urls):
             progress_fn(i + 1, len(alle_urls))
             log(f"\n[{i+1}/{len(alle_urls)}] {url}")
 
