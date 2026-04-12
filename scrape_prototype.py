@@ -218,7 +218,7 @@ def maak_excel(matches: list) -> bytes:
         cell.alignment = Alignment(horizontal="center")
 
     breedte = [12, 25, 10, 15, 18, 18, 50]
-    , b in enumerate(breedte, 1):
+    for i, b in enumerate(breedte, 1):
         ws.column_dimensions[ws.cell(1, i).column_letter].width = b
 
     for r, m in enumerate(matches, 2):
