@@ -59,25 +59,21 @@ html, body, [class*="css"] {
     font-family: 'IBM Plex Sans', sans-serif;
 }
 
-/* Donker industrieel thema */
 .stApp {
     background-color: #0f1117;
     color: #e0e0e0;
 }
 
-/* Sidebar */
 section[data-testid="stSidebar"] {
     background-color: #161b22;
     border-right: 1px solid #2d333b;
 }
 
-/* Headers */
 h1, h2, h3 {
     font-family: 'IBM Plex Mono', monospace !important;
     letter-spacing: -0.5px;
 }
 
-/* Knoppen */
 .stButton > button {
     background-color: #238636;
     color: #ffffff;
@@ -93,7 +89,6 @@ h1, h2, h3 {
     background-color: #2ea043;
 }
 
-/* Metric kaartjes */
 div[data-testid="metric-container"] {
     background-color: #161b22;
     border: 1px solid #2d333b;
@@ -101,13 +96,11 @@ div[data-testid="metric-container"] {
     padding: 1rem 1.2rem;
 }
 
-/* Tabel */
 .stDataFrame {
     border: 1px solid #2d333b;
     border-radius: 8px;
 }
 
-/* Log-console */
 .log-box {
     background-color: #0d1117;
     border: 1px solid #2d333b;
@@ -121,7 +114,6 @@ div[data-testid="metric-container"] {
     white-space: pre-wrap;
 }
 
-/* Badge */
 .badge {
     display: inline-block;
     padding: 2px 8px;
@@ -134,14 +126,12 @@ div[data-testid="metric-container"] {
 .badge-yellow { background-color: #3d2f00; color: #d29922; }
 .badge-red    { background-color: #3d1a1a; color: #f85149; }
 
-/* Drempelschuif label */
 .stSlider label {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 13px;
     color: #8b949e;
 }
 
-/* Download-knop */
 .stDownloadButton > button {
     background-color: #1f6feb;
     color: #ffffff;
@@ -154,7 +144,6 @@ div[data-testid="metric-container"] {
     background-color: #388bfd;
 }
 
-/* Divider */
 hr { border-color: #2d333b; }
 </style>
 """, unsafe_allow_html=True)
@@ -401,16 +390,20 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
         log(f"📋 Totaal {len(alle_urls)} opdrachten gevonden.")
         return alle_urls
 
-    # ── Streamlit sessie aanmaken (eenmalig per batch) ───────────────────────
+    # ── Streamlit sessie aanmaken ────────────────────────────────────────────
     def maak_streamlit_sessie(browser):
-        """Open Streamlit, log in en klik de juiste tab. Geeft de page terug."""
+        """
+        Open een nieuwe Streamlit-tab, log in en klik de juiste tab.
+        Wacht langer zodat de app volledig opstaat na een 'koude start'.
+        """
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(
             "https://inthearenabv-cv-tool.streamlit.app/",
             wait_until="domcontentloaded",
             timeout=60000,
         )
-        page.wait_for_timeout(12000)
+        # Langere wachttijd: Streamlit Cloud free tier heeft soms 20+ seconden nodig
+        page.wait_for_timeout(20000)
 
         frame = page.frame_locator('iframe').first
 
@@ -419,7 +412,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
             if pw.is_visible(timeout=5000):
                 pw.fill(credentials["streamlit_pw"])
                 frame.locator('button:has-text("Log in")').first.click()
-                page.wait_for_timeout(12000)
+                page.wait_for_timeout(15000)
                 log("  🔑 Streamlit ingelogd.")
         except Exception:
             pass
@@ -433,16 +426,28 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
         except Exception:
             pass
 
+        # Wacht tot de textarea zichtbaar is voor we verdergaan
+        try:
+            frame.locator('textarea').first.wait_for(state="visible", timeout=30000)
+            log("  ✅ Streamlit-sessie klaar.")
+        except Exception:
+            log("  ⚠️ Textarea nog niet zichtbaar na sessie-aanmaak, doorgaan...")
+
         return page
 
-    # ── Streamlit analyse (hergebruikt bestaande pagina, met retry) ──────────
-    def analyseer_in_streamlit(streamlit_page, tekst, max_retries=2):
+    # ── Streamlit analyse ────────────────────────────────────────────────────
+    def analyseer_in_streamlit(streamlit_page, browser, tekst, max_retries=2):
         """
-        Hergebruikt een bestaande Streamlit-pagina per batch.
-        Bij timeout: laad de pagina opnieuw en probeer nogmaals.
+        Hergebruikt een bestaande Streamlit-pagina.
+        Bij fout: sluit de huidige pagina en maak een NIEUWE sessie aan
+        (betrouwbaarder dan herladen bij Streamlit Cloud free tier).
+        Geeft (resultaten, streamlit_page) terug zodat de beller
+        de nieuwe pagina kan bijhouden.
         """
+        huidige_pagina = streamlit_page
+
         for poging in range(1, max_retries + 1):
-            frame = streamlit_page.frame_locator('iframe').first
+            frame = huidige_pagina.frame_locator('iframe').first
             try:
                 # Textarea invullen
                 ta = frame.locator('textarea').first
@@ -452,13 +457,14 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                 ta.fill(tekst)
                 log(f"  ✍️ Tekst ingevuld (poging {poging}).")
 
-                streamlit_page.wait_for_timeout(2000)
+                huidige_pagina.wait_for_timeout(2000)
                 frame.locator('button:has-text("Analyseer geschiktheid")').first.click()
                 log("  ⏳ Analyse gestart...")
 
-                # Wacht op resultaten
-                frame.locator('text=Resultaten').wait_for(timeout=90000)
-                streamlit_page.wait_for_timeout(5000)
+                # FIX 1: .first voorkomt strict mode violation wanneer het woord
+                # "Resultaten" meerdere keren op de pagina voorkomt (bv. in CV-teksten)
+                frame.locator('text=Resultaten').first.wait_for(timeout=90000)
+                huidige_pagina.wait_for_timeout(5000)
 
                 # Resultaten uitlezen
                 resultaten = []
@@ -469,7 +475,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                         blok = frame.locator('[data-testid="stExpander"]').nth(j)
                         try:
                             blok.locator('summary, [data-testid="stExpanderToggleIcon"], button').first.click(timeout=5000)
-                            streamlit_page.wait_for_timeout(1000)
+                            huidige_pagina.wait_for_timeout(1000)
                         except Exception:
                             pass
 
@@ -488,30 +494,28 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                     except Exception as e:
                         log(f"  ⚠️ Kandidaatblok fout: {e}")
 
-                return resultaten
+                return resultaten, huidige_pagina
 
             except Exception as e:
-                log(f"  ⚠️ Streamlit time-out/fout (poging {poging}/{max_retries}): {e}")
+                log(f"  ⚠️ Streamlit fout (poging {poging}/{max_retries}): {e}")
+
                 if poging < max_retries:
-                    log("  🔄 Streamlit-pagina herladen en opnieuw proberen...")
+                    # FIX 2: sluit kapotte pagina en open een volledig nieuwe sessie
+                    # (reload is onbetrouwbaar op Streamlit Cloud free tier)
+                    log("  🔄 Kapotte sessie sluiten, nieuwe Streamlit-sessie aanmaken...")
                     try:
-                        streamlit_page.reload(wait_until="domcontentloaded", timeout=60000)
-                        streamlit_page.wait_for_timeout(10000)
-                        # Na reload: tab opnieuw klikken
-                        frame = streamlit_page.frame_locator('iframe').first
-                        try:
-                            tab = frame.locator('button:has-text("Test geschiktheid opdracht")').first
-                            if tab.is_visible(timeout=5000):
-                                tab.click()
-                                streamlit_page.wait_for_timeout(3000)
-                        except Exception:
-                            pass
-                    except Exception as reload_err:
-                        log(f"  ❌ Herladen mislukt: {reload_err}")
+                        huidige_pagina.close()
+                    except Exception:
+                        pass
+
+                    try:
+                        huidige_pagina = maak_streamlit_sessie(browser)
+                    except Exception as nieuw_err:
+                        log(f"  ❌ Nieuwe sessie aanmaken mislukt: {nieuw_err}")
                         break
 
         log("  ❌ Analyse opgegeven na alle pogingen.")
-        return []
+        return [], huidige_pagina
 
     # ── Hoofd scraper loop ───────────────────────────────────────────────────
     alle_matches = []
@@ -579,7 +583,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
                 login_striive(striive_page)
 
-                # ✅ Één Streamlit-sessie voor de hele batch (was: per opdracht)
+                # Één Streamlit-sessie voor de hele batch
                 log("  🌐 Streamlit-sessie openen voor batch...")
                 streamlit_page = maak_streamlit_sessie(batch_browser)
 
@@ -603,7 +607,11 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                         # Cooldown om Streamlit niet te overbelasten
                         time.sleep(COOLDOWN_SECONDEN)
 
-                        kandidaten = analyseer_in_streamlit(streamlit_page, tekst)
+                        # streamlit_page wordt teruggegeven zodat we de (eventueel
+                        # vernieuwde) pagina bijhouden na een retry
+                        kandidaten, streamlit_page = analyseer_in_streamlit(
+                            streamlit_page, batch_browser, tekst
+                        )
 
                         for naam, score in kandidaten:
                             if score > drempel:
@@ -631,7 +639,6 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                         mislukte_urls.append(url)
 
             finally:
-                # Streamlit-pagina netjes sluiten
                 try:
                     if streamlit_page:
                         streamlit_page.close()
@@ -669,7 +676,6 @@ for key, default in [
 
 # ─── UI ───────────────────────────────────────────────────────────────────────
 
-# Header
 col_logo, col_titel = st.columns([1, 8])
 with col_logo:
     st.markdown("<div style='font-size:48px;padding-top:8px'>⚡</div>", unsafe_allow_html=True)
@@ -709,7 +715,7 @@ with st.sidebar:
             st.code(_playwright_status.get("stderr") or _playwright_status.get("stdout") or "Onbekende fout")
         else:
             st.code(str(_playwright_status))
-    st.caption("v1.1 · In The Arena BV")
+    st.caption("v1.2 · In The Arena BV")
 
 # ─── Hoofd kolommen ───────────────────────────────────────────────────────────
 col_links, col_rechts = st.columns([3, 2], gap="large")
