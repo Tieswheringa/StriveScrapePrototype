@@ -719,6 +719,7 @@ def render_resultaten():
                 data=excel_bytes,
                 file_name="striive_matches.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"download_excel_{len(st.session_state.matches)}_{st.session_state.voortgang[0]}",
             )
         elif st.session_state.klaar:
             st.info("Geen matches gevonden boven de ingestelde drempel.")
