@@ -265,7 +265,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
 
         # ── Inloggen ──────────────────────────────────────────────────────────
         log("🔐 Inloggen op Striive...")
-        page.goto("https://login.striive.com/", wait_until="domcontentloaded", timeout=60000)
+        page.("https://login.striive.com/", wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(3000)
 
         # E-mailveld: probeer meerdere selectors
@@ -337,7 +337,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
             page.click('a:has-text("Opdrachten")', timeout=10000)
         except:
             # Probeer via directe URL
-            page.goto("https://supplier.striive.com/job-requests")
+            page.("https://supplier.striive.com/job-requests")
 
         page.wait_for_selector('[data-testid="jobRequestListItem"]', timeout=30000)
         page.wait_for_timeout(2000)
@@ -396,7 +396,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
             log(f"\n[{i+1}/{len(alle_urls)}] {url}")
 
             try:
-                page.goto(url)
+                page.(url)
                 page.wait_for_timeout(2000)
                 tekst = page.locator('app-job-request-details').inner_text(timeout=15000)
             except Exception as e:
@@ -412,8 +412,8 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
             # ── Naar Streamlit CV-tool ─────────────────────────────────────────
             # Herlaad de pagina elke keer zodat de app in begintoestand is
             # ── Naar Streamlit CV-tool ─────────────────────────────────────────
+            # ── Naar Streamlit CV-tool ─────────────────────────────────────────
             page.goto("https://inthearenabv-cv-tool.streamlit.app/")
-            page.wait_for_timeout(10000)
             frame = page.frame_locator('iframe').first
             
             if not streamlit_ingelogd:
@@ -428,41 +428,25 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
                 except:
                     streamlit_ingelogd = True
             
-            # Probeer textarea te bereiken, met retry via tab-knop
-            textarea_gevonden = False
-            ta = None
-            for poging in range(4):
-                # Als textarea nog niet zichtbaar is, klik de tab-knop
-                try:
-                    zichtbaar = frame.locator('textarea').first.is_visible()
-                except:
-                    zichtbaar = False
-            
-                if not zichtbaar:
-                    try:
-                        frame.locator('button:has-text("Test geschiktheid opdracht")').click(timeout=8000)
-                        page.wait_for_timeout(4000)
-                        log(f"  🖱️ Tab geklikt (poging {poging+1})")
-                    except:
-                        page.wait_for_timeout(3000)
-            
-                try:
-                    ta = frame.locator('textarea').first
-                    ta.wait_for(state="visible", timeout=15000)
-                    textarea_gevonden = True
-                    log(f"  ✍️ Textarea gevonden op poging {poging+1}")
-                    break
-                except:
-                    continue
-            
-            if not textarea_gevonden:
-                log("  ⚠️ Textarea niet gevonden na 4 pogingen, opdracht overgeslagen.")
+            # Wacht tot Streamlit klaar is met laden (tab-knop zichtbaar)
+            try:
+                tab_knop = frame.locator('button:has-text("Test geschiktheid opdracht")')
+                tab_knop.wait_for(state="visible", timeout=60000)
+                tab_knop.click()
+                page.wait_for_timeout(3000)
+                log("  🖱️ Tab 'Test geschiktheid' geopend.")
+            except Exception as e:
+                log(f"  ⚠️ Tab-knop niet gevonden: {e}")
                 continue
             
+            # Wacht tot textarea zichtbaar is
             try:
+                ta = frame.locator('textarea').first
+                ta.wait_for(state="visible", timeout=30000)
                 ta.click(timeout=10000)
                 ta.fill("")
                 ta.fill(tekst)
+                log("  ✍️ Tekst ingevuld.")
             except Exception as e:
                 log(f"  ⚠️ Kon tekst niet invullen: {e}")
                 continue
