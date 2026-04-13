@@ -694,6 +694,9 @@ def render_resultaten():
         m2.metric("Matches", len(st.session_state.matches))
         m3.metric("Drempelwaarde", f"{drempel}/100")
 
+    # Maak placeholder eerst leeg voordat je opnieuw rendert
+    resultaat_placeholder.empty()
+
     with resultaat_placeholder.container():
         if st.session_state.matches:
             df = pd.DataFrame(st.session_state.matches)
@@ -713,14 +716,17 @@ def render_resultaten():
                 hide_index=True,
             )
 
-            excel_bytes = maak_excel(st.session_state.matches)
-            st.download_button(
-                label="⬇️  Download als Excel",
-                data=excel_bytes,
-                file_name="striive_matches.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"download_excel_{len(st.session_state.matches)}_{st.session_state.voortgang[0]}",
-            )
+            # Downloadknop alleen tonen als scraper klaar is
+            if not st.session_state.bezig:
+                excel_bytes = maak_excel(st.session_state.matches)
+                st.download_button(
+                    label="⬇️  Download als Excel",
+                    data=excel_bytes,
+                    file_name="striive_matches.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_excel_final",
+                )
+
         elif st.session_state.klaar:
             st.info("Geen matches gevonden boven de ingestelde drempel.")
         else:
