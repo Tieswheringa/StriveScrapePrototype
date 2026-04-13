@@ -41,6 +41,7 @@ if _playwright_status["returncode"] != 0:
     st.error("Failed to install browsers")
     st.code(_playwright_status["stderr"] or _playwright_status["stdout"])
     st.stop()
+
 # ─── Pagina-configuratie ───────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Striive Matcher",
@@ -157,7 +158,6 @@ hr { border-color: #2d333b; }
 </style>
 """, unsafe_allow_html=True)
 
-
 # ─── Hulpfuncties ─────────────────────────────────────────────────────────────
 
 def extraheer_uurtarief(tekst: str) -> str:
@@ -224,7 +224,8 @@ def maak_excel(matches: list) -> bytes:
     for r, m in enumerate(matches, 2):
         for col, val in enumerate(
             [m["opdracht"], m["naam"], m["score"],
-             m["uurtarief"], m["startdatum"], m["deadline"], m["url"],"https://chatgpt.com/g/g-692562722fd48191a45a59eef67f00f2-inthearena-cv-builder"], 1
+             m["uurtarief"], m["startdatum"], m["deadline"], m["url"],
+             "https://chatgpt.com/g/g-692562722fd48191a45a59eef67f00f2-inthearena-cv-builder"], 1
         ):
             cell = ws.cell(row=r, column=col, value=val)
             cell.font = Font(name="Arial")
@@ -243,15 +244,9 @@ def maak_excel(matches: list) -> bytes:
     return buf.getvalue()
 
 
-def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn):
-    """Voert de volledige scrape uit in batches.
-    - Haalt eerst alle opdracht-URLs op
-    - Verwerkt daarna in batches
-    - Gebruikt per opdracht een tijdelijke Streamlit-tab
-    - Slaat fouten over en gaat verder
-    """
+def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn, batch_done_fn=None):
+    """Voert de scrape uit in batches en werkt UI tussendoor bij."""
     from playwright.sync_api import sync_playwright
-    import re
 
     def log(msg):
         log_fn(msg)
@@ -399,9 +394,6 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
         return alle_urls
 
     def analyseer_in_streamlit(browser, tekst):
-        """Analyseert één opdrachttekst in de Streamlit-tool.
-        Geeft lijst van tuples terug: [(naam, score), ...]
-        """
         resultaten = []
         streamlit_page = browser.new_page(viewport={"width": 1280, "height": 900})
 
@@ -415,7 +407,6 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
 
             frame = streamlit_page.frame_locator('iframe').first
 
-            # Login indien nodig
             try:
                 pw = frame.locator('input[type="password"]').first
                 if pw.is_visible(timeout=5000):
@@ -426,7 +417,6 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
             except:
                 pass
 
-            # Optionele tab
             try:
                 tab = frame.locator('button:has-text("Test geschiktheid opdracht")').first
                 if tab.is_visible(timeout=5000):
@@ -436,7 +426,6 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
             except:
                 pass
 
-            # Tekst invoeren
             ta = frame.locator('textarea').first
             ta.wait_for(state="visible", timeout=30000)
             ta.click(timeout=10000)
@@ -494,7 +483,6 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
     batch_grootte = 5
 
     with sync_playwright() as p:
-        # Stap 1: URLs ophalen in aparte, korte browser-run
         alle_urls = []
         init_browser = None
 
@@ -531,7 +519,6 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
         totaal = len(alle_urls)
         verwerkt = 0
 
-        # Stap 2: verwerken in batches
         for batch_nr, batch_urls in enumerate(chunks(alle_urls, batch_grootte), start=1):
             batch_browser = None
             log(f"\n📦 Start batch {batch_nr} ({len(batch_urls)} opdrachten)")
@@ -606,6 +593,9 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
 
                 log(f"📦 Batch {batch_nr} afgesloten.")
 
+                if batch_done_fn:
+                    batch_done_fn()
+
     if mislukte_urls:
         log(f"\n⚠️ {len(mislukte_urls)} opdrachten mislukt of overgeslagen.")
 
@@ -623,7 +613,6 @@ for key, default in [
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
-
 
 # ─── UI ───────────────────────────────────────────────────────────────────────
 
@@ -650,9 +639,14 @@ with st.sidebar:
     streamlit_pw = st.text_input("Streamlit wachtwoord", type="password", value="InTheArenaBV")
     st.markdown("---")
     st.markdown("### ⚙️ Instellingen")
-    drempel = st.slider("Minimale score", min_value=50, max_value=95, value=80, step=5,
-                        help="Alleen kandidaten boven deze score worden opgenomen.")
-    st.markdown("---")
+    drempel = st.slider(
+        "Minimale score",
+        min_value=50,
+        max_value=95,
+        value=80,
+        step=5,
+        help="Alleen kandidaten boven deze score worden opgenomen."
+    )
     st.markdown("---")
     if isinstance(_playwright_status, dict) and _playwright_status.get("returncode") == 0:
         st.success("✅ Playwright Chromium klaar.", icon="✅")
@@ -669,64 +663,13 @@ col_links, col_rechts = st.columns([3, 2], gap="large")
 
 with col_links:
     st.markdown("### 📊 Resultaten")
-
-    # Metrics
-    m1, m2, m3 = st.columns(3)
-    ged, tot = st.session_state.voortgang
-    m1.metric("Verwerkt", f"{ged}/{tot}" if tot else "0/0")
-    m2.metric("Matches", len(st.session_state.matches))
-    m3.metric("Drempelwaarde", f"{drempel}/100")
-
-    # Tabel
-    if st.session_state.matches:
-        import pandas as pd
-        df = pd.DataFrame(st.session_state.matches)
-        df_weergave = df[["opdracht", "naam", "score", "uurtarief", "startdatum", "deadline"]].copy()
-        df_weergave.columns = ["Opdracht", "Kandidaat", "Score", "Uurtarief", "Startdatum", "Reageren t/m"]
-        df_weergave["CV Herschrijven"] = "https://chatgpt.com/g/g-692562722fd48191a45a59eef67f00f2-inthearena-cv-builder"
-        
-        st.dataframe(
-            df_weergave,
-            column_config={
-                "CV Herschrijven": st.column_config.LinkColumn(
-                    "CV Herschrijven",
-                    display_text="✏️ Open CV Builder",
-                )
-            },
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        # Download knop
-        excel_bytes = maak_excel(st.session_state.matches)
-        st.download_button(
-            label="⬇️  Download als Excel",
-            data=excel_bytes,
-            file_name="striive_matches.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-    elif st.session_state.klaar:
-        st.info("Geen matches gevonden boven de ingestelde drempel.")
-    else:
-        st.markdown(
-            "<p style='color:#8b949e;font-size:14px'>Nog geen resultaten. Start de analyse via de knop hieronder.</p>",
-            unsafe_allow_html=True
-        )
+    metrics_placeholder = st.empty()
+    resultaat_placeholder = st.empty()
 
 with col_rechts:
     st.markdown("### 📋 Live log")
     log_placeholder = st.empty()
 
-    def render_log():
-        log_tekst = "\n".join(st.session_state.logs[-60:])
-        log_placeholder.markdown(
-            f"<div class='log-box'>{log_tekst}</div>",
-            unsafe_allow_html=True
-        )
-
-    render_log()
-
-# ─── Startknop ────────────────────────────────────────────────────────────────
 st.markdown("---")
 col_btn, col_status = st.columns([2, 5])
 
@@ -738,12 +681,76 @@ with col_btn:
     )
 
 with col_status:
-    if st.session_state.bezig:
+    progress_placeholder = st.empty()
+
+
+def render_resultaten():
+    import pandas as pd
+
+    with metrics_placeholder.container():
+        m1, m2, m3 = st.columns(3)
         ged, tot = st.session_state.voortgang
-        if tot:
-            st.progress(ged / tot, text=f"Verwerken {ged} van {tot} opdrachten...")
+        m1.metric("Verwerkt", f"{ged}/{tot}" if tot else "0/0")
+        m2.metric("Matches", len(st.session_state.matches))
+        m3.metric("Drempelwaarde", f"{drempel}/100")
+
+    with resultaat_placeholder.container():
+        if st.session_state.matches:
+            df = pd.DataFrame(st.session_state.matches)
+            df_weergave = df[["opdracht", "naam", "score", "uurtarief", "startdatum", "deadline"]].copy()
+            df_weergave.columns = ["Opdracht", "Kandidaat", "Score", "Uurtarief", "Startdatum", "Reageren t/m"]
+            df_weergave["CV Herschrijven"] = "https://chatgpt.com/g/g-692562722fd48191a45a59eef67f00f2-inthearena-cv-builder"
+
+            st.dataframe(
+                df_weergave,
+                column_config={
+                    "CV Herschrijven": st.column_config.LinkColumn(
+                        "CV Herschrijven",
+                        display_text="✏️ Open CV Builder",
+                    )
+                },
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            excel_bytes = maak_excel(st.session_state.matches)
+            st.download_button(
+                label="⬇️  Download als Excel",
+                data=excel_bytes,
+                file_name="striive_matches.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        elif st.session_state.klaar:
+            st.info("Geen matches gevonden boven de ingestelde drempel.")
         else:
-            st.info("Bezig met opstarten...")
+            st.markdown(
+                "<p style='color:#8b949e;font-size:14px'>Nog geen resultaten. Start de analyse via de knop hieronder.</p>",
+                unsafe_allow_html=True
+            )
+
+
+def render_log():
+    log_tekst = "\n".join(st.session_state.logs[-60:])
+    log_placeholder.markdown(
+        f"<div class='log-box'>{log_tekst}</div>",
+        unsafe_allow_html=True
+    )
+
+
+def render_progress():
+    ged, tot = st.session_state.voortgang
+    if st.session_state.bezig:
+        if tot:
+            progress_placeholder.progress(ged / tot, text=f"Verwerken {ged} van {tot} opdrachten...")
+        else:
+            progress_placeholder.info("Bezig met opstarten...")
+    else:
+        progress_placeholder.empty()
+
+
+render_resultaten()
+render_log()
+render_progress()
 
 # ─── Scraper starten ──────────────────────────────────────────────────────────
 if start_knop:
@@ -756,14 +763,27 @@ if start_knop:
         st.session_state.logs = []
         st.session_state.voortgang = (0, 0)
 
+        render_resultaten()
+        render_log()
+        render_progress()
+
         def log_fn(msg):
             st.session_state.logs.append(msg)
+            render_log()
 
         def progress_fn(huidig, totaal):
             st.session_state.voortgang = (huidig, totaal)
+            render_progress()
+            render_resultaten()
 
         def result_fn(matches):
             st.session_state.matches = matches
+            render_resultaten()
+
+        def batch_done_fn():
+            render_log()
+            render_progress()
+            render_resultaten()
 
         credentials = {
             "email": email,
@@ -772,12 +792,22 @@ if start_knop:
         }
 
         try:
-            matches = run_scraper(credentials, drempel, log_fn, progress_fn, result_fn)
+            matches = run_scraper(
+                credentials,
+                drempel,
+                log_fn,
+                progress_fn,
+                result_fn,
+                batch_done_fn=batch_done_fn,
+            )
             st.session_state.matches = matches
             st.session_state.klaar = True
         except Exception as e:
             st.session_state.logs.append(f"\n❌ Fout: {e}")
+            render_log()
         finally:
             st.session_state.bezig = False
+            render_progress()
+            render_resultaten()
 
         st.rerun()
