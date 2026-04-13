@@ -391,7 +391,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
 
         alle_matches = []
 
-        for i, url in enumerate(alle_urls[:5]):
+        for i, url in enumerate(alle_urls):
             progress_fn(i + 1, len(alle_urls))
             log(f"\n[{i+1}/{len(alle_urls)}] {url}")
 
