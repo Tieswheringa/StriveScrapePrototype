@@ -569,7 +569,7 @@ with col_links:
         df_weergave = df[["opdracht", "naam", "score", "uurtarief", "startdatum", "deadline"]].copy()
         df_weergave.columns = ["Opdracht", "Kandidaat", "Score", "Uurtarief", "Startdatum", "Reageren t/m"]
         st.dataframe(
-            df_weergave.style.background_gradient(subset=["Score"], cmap="Greens"),
+            df_weergave,
             use_container_width=True,
             hide_index=True,
         )
