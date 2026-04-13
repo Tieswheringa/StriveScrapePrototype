@@ -210,21 +210,21 @@ def maak_excel(matches: list) -> bytes:
     ws.title = "Matches"
 
     headers = ["Opdracht #", "Kandidaat", "Score", "Uurtarief",
-               "Startdatum", "Reageren t/m", "Link naar opdracht"]
+               "Startdatum", "Reageren t/m", "Link naar opdracht", "CV herschrijven]
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
         cell.font = Font(bold=True, color="FFFFFF", name="Arial")
         cell.fill = PatternFill("solid", start_color="2E4057")
         cell.alignment = Alignment(horizontal="center")
 
-    breedte = [12, 25, 10, 15, 18, 18, 50]
+    breedte = [12, 25, 10, 15, 18, 18, 50, 50]
     for i, b in enumerate(breedte, 1):
         ws.column_dimensions[ws.cell(1, i).column_letter].width = b
 
     for r, m in enumerate(matches, 2):
         for col, val in enumerate(
             [m["opdracht"], m["naam"], m["score"],
-             m["uurtarief"], m["startdatum"], m["deadline"], m["url"]], 1
+             m["uurtarief"], m["startdatum"], m["deadline"], m["url"],"https://chatgpt.com/g/g-692562722fd48191a45a59eef67f00f2-inthearena-cv-builder"], 1
         ):
             cell = ws.cell(row=r, column=col, value=val)
             cell.font = Font(name="Arial")
@@ -233,6 +233,10 @@ def maak_excel(matches: list) -> bytes:
         link_cell = ws.cell(row=r, column=7, value=m["url"])
         link_cell.hyperlink = m["url"]
         link_cell.font = Font(name="Arial", color="0563C1", underline="single")
+
+        cv_cell = ws.cell(row=r, column=8, value="Open CV Builder")
+        cv_cell.hyperlink = "https://chatgpt.com/g/g-692562722fd48191a45a59eef67f00f2-inthearena-cv-builder"
+        cv_cell.font = Font(name="Arial", color="0563C1", underline="single")
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -391,7 +395,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
 
         alle_matches = []
 
-        for i, url in enumerate(alle_urls):
+        for i, url in enumerate(alle_urls[:1]):
             progress_fn(i + 1, len(alle_urls))
             log(f"\n[{i+1}/{len(alle_urls)}] {url}")
 
@@ -572,8 +576,16 @@ with col_links:
         df = pd.DataFrame(st.session_state.matches)
         df_weergave = df[["opdracht", "naam", "score", "uurtarief", "startdatum", "deadline"]].copy()
         df_weergave.columns = ["Opdracht", "Kandidaat", "Score", "Uurtarief", "Startdatum", "Reageren t/m"]
+        df_weergave["CV Herschrijven"] = "https://chatgpt.com/g/g-692562722fd48191a45a59eef67f00f2-inthearena-cv-builder"
+        
         st.dataframe(
             df_weergave,
+            column_config={
+                "CV Herschrijven": st.column_config.LinkColumn(
+                    "CV Herschrijven",
+                    display_text="✏️ Open CV Builder",
+                )
+            },
             use_container_width=True,
             hide_index=True,
         )
