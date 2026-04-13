@@ -4,6 +4,8 @@ import io
 import time
 import subprocess
 import sys
+from typing import Callable, Dict, List, Optional
+
 import streamlit as st
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -11,6 +13,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 # Schrijfbare locatie op Streamlit Cloud
 PLAYWRIGHT_BROWSERS_DIR = "/tmp/pw-browsers"
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PLAYWRIGHT_BROWSERS_DIR
+
 
 @st.cache_resource(show_spinner="Playwright-browsers installeren (eenmalig)...")
 def installeer_playwright():
@@ -35,6 +38,7 @@ def installeer_playwright():
             "stdout": "",
             "stderr": str(e),
         }
+
 
 _playwright_status = installeer_playwright()
 
@@ -150,6 +154,11 @@ hr { border-color: #2d333b; }
 
 # ─── Hulpfuncties ─────────────────────────────────────────────────────────────
 
+def normaliseer_url(url: str) -> str:
+    """Maakt URL-vergelijking robuuster door trailing slash en spaties te verwijderen."""
+    return (url or "").strip().rstrip("/")
+
+
 def extraheer_uurtarief(tekst: str) -> str:
     patronen = [
         r'[Uu]urtarief[:\s]*[€]?\s*(\d+[\.,]?\d*)',
@@ -159,10 +168,10 @@ def extraheer_uurtarief(tekst: str) -> str:
         r'[Hh]ourly rate[:\s]*[€$]?\s*(\d+[\.,]?\d*)',
         r'[Rr]ate[:\s]*[€$]?\s*(\d+[\.,]?\d*)',
     ]
-    for p in patronen:
-        m = re.search(p, tekst)
-        if m:
-            return f"€{m.group(1)}/uur"
+    for patroon in patronen:
+        match = re.search(patroon, tekst)
+        if match:
+            return f"€{match.group(1)}/uur"
     return "-"
 
 
@@ -174,10 +183,10 @@ def extraheer_startdatum(tekst: str) -> str:
         r'[Vv]oor\s+(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})',
         r'(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})',
     ]
-    for p in patronen:
-        m = re.search(p, tekst)
-        if m:
-            return m.group(1)
+    for patroon in patronen:
+        match = re.search(patroon, tekst)
+        if match:
+            return match.group(1)
     return "-"
 
 
@@ -187,69 +196,90 @@ def extraheer_reageer_deadline(tekst: str) -> str:
         r'[Rr]eageren kan t/m\s+(\d{1,2}\s+\w+\s+\d{4})',
         r'[Rr]eageren kan t/m\s+([^\n]+)',
     ]
-    for p in patronen:
-        m = re.search(p, tekst)
-        if m:
-            return m.group(1).strip()
+    for patroon in patronen:
+        match = re.search(patroon, tekst)
+        if match:
+            return match.group(1).strip()
     return "-"
 
 
-def maak_excel(matches: list) -> bytes:
+def maak_excel(matches: List[dict]) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Matches"
 
-    headers = ["Opdracht #", "Kandidaat", "Score", "Uurtarief",
-               "Startdatum", "Reageren t/m", "Link naar opdracht", "CV herschrijven"]
-    for col, h in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=h)
+    headers = [
+        "Opdracht #",
+        "Kandidaat",
+        "Score",
+        "Uurtarief",
+        "Startdatum",
+        "Reageren t/m",
+        "Link naar opdracht",
+        "CV herschrijven",
+    ]
+
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=header)
         cell.font = Font(bold=True, color="FFFFFF", name="Arial")
         cell.fill = PatternFill("solid", start_color="2E4057")
         cell.alignment = Alignment(horizontal="center")
 
-    breedte = [12, 25, 10, 15, 18, 18, 50, 50]
-    for i, b in enumerate(breedte, 1):
-        ws.column_dimensions[ws.cell(1, i).column_letter].width = b
+    breedtes = [12, 25, 10, 15, 18, 18, 50, 50]
+    for i, breedte in enumerate(breedtes, 1):
+        ws.column_dimensions[ws.cell(1, i).column_letter].width = breedte
 
-    for r, m in enumerate(matches, 2):
-        for col, val in enumerate(
-            [m["opdracht"], m["naam"], m["score"],
-             m["uurtarief"], m["startdatum"], m["deadline"], m["url"],
-             "https://chatgpt.com/g/g-692562722fd48191a45a59eef67f00f2-inthearena-cv-builder"], 1
-        ):
-            cell = ws.cell(row=r, column=col, value=val)
+    for row_index, match in enumerate(matches, 2):
+        waarden = [
+            match["opdracht"],
+            match["naam"],
+            match["score"],
+            match["uurtarief"],
+            match["startdatum"],
+            match["deadline"],
+            match["url"],
+            "https://chatgpt.com/g/g-692562722fd48191a45a59eef67f00f2-inthearena-cv-builder",
+        ]
+
+        for col, waarde in enumerate(waarden, 1):
+            cell = ws.cell(row=row_index, column=col, value=waarde)
             cell.font = Font(name="Arial")
             cell.fill = PatternFill("solid", start_color="E8F5E9")
 
-        link_cell = ws.cell(row=r, column=7, value=m["url"])
-        link_cell.hyperlink = m["url"]
+        link_cell = ws.cell(row=row_index, column=7, value=match["url"])
+        link_cell.hyperlink = match["url"]
         link_cell.font = Font(name="Arial", color="0563C1", underline="single")
 
-        cv_cell = ws.cell(row=r, column=8, value="Open CV Builder")
+        cv_cell = ws.cell(row=row_index, column=8, value="Open CV Builder")
         cv_cell.hyperlink = "https://chatgpt.com/g/g-692562722fd48191a45a59eef67f00f2-inthearena-cv-builder"
         cv_cell.font = Font(name="Arial", color="0563C1", underline="single")
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
 
 
-def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn, batch_done_fn=None):
+def run_scraper(
+    credentials: Dict[str, str],
+    drempel: int,
+    laatst_verwerkte_link: str,
+    log_fn: Callable[[str], None],
+    progress_fn: Callable[[int, int], None],
+    result_fn: Callable[[List[dict]], None],
+    batch_done_fn: Optional[Callable[[], None]] = None,
+):
     """Voert de scrape uit in batches en werkt UI tussendoor bij."""
     from playwright.sync_api import sync_playwright
 
-    # Cooldown in seconden tussen Streamlit-analyses.
-    # Verhoog naar 5-8 als de time-outs aanhouden.
     COOLDOWN_SECONDEN = 3
 
-    def log(msg):
+    def log(msg: str):
         log_fn(msg)
 
     def chunks(lst, size):
         for i in range(0, len(lst), size):
             yield lst[i:i + size]
 
-    # ── Striive login ────────────────────────────────────────────────────────
     def login_striive(page):
         log("🔐 Inloggen op Striive...")
         page.goto("https://login.striive.com/", wait_until="domcontentloaded", timeout=60000)
@@ -264,13 +294,14 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
             'input[autocomplete="email"]',
             'input[autocomplete="username"]',
         ]
+
         email_veld = None
-        for sel in email_selectors:
+        for selector in email_selectors:
             try:
-                el = page.locator(sel).first
-                el.wait_for(state="visible", timeout=5000)
-                email_veld = el
-                log(f"  ✔ E-mailveld gevonden: {sel}")
+                element = page.locator(selector).first
+                element.wait_for(state="visible", timeout=5000)
+                email_veld = element
+                log(f"  ✔ E-mailveld gevonden: {selector}")
                 break
             except Exception:
                 continue
@@ -285,10 +316,10 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
         email_veld.click()
         email_veld.fill(credentials["email"])
 
-        ww_veld = page.locator('input[type="password"]').first
-        ww_veld.wait_for(state="visible", timeout=10000)
-        ww_veld.click()
-        ww_veld.fill(credentials["wachtwoord"])
+        wachtwoord_veld = page.locator('input[type="password"]').first
+        wachtwoord_veld.wait_for(state="visible", timeout=10000)
+        wachtwoord_veld.click()
+        wachtwoord_veld.fill(credentials["wachtwoord"])
 
         login_selectors = [
             'button:has-text("Login")',
@@ -296,17 +327,18 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
             'button[type="submit"]',
             'input[type="submit"]',
         ]
-        for sel in login_selectors:
+
+        for selector in login_selectors:
             try:
-                knop = page.locator(sel).first
+                knop = page.locator(selector).first
                 knop.wait_for(state="visible", timeout=4000)
                 knop.click()
-                log(f"  Login-knop geklikt ({sel}).")
+                log(f"  Login-knop geklikt ({selector}).")
                 break
             except Exception:
                 continue
         else:
-            ww_veld.press("Enter")
+            wachtwoord_veld.press("Enter")
             log("  Login-knop niet gevonden, Enter gebruikt als fallback.")
 
         try:
@@ -316,7 +348,6 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
         log("✅ Ingelogd!")
 
-    # ── Opdrachten pagina ────────────────────────────────────────────────────
     def ga_naar_opdrachten(page):
         try:
             page.click('a:has-text("Opdrachten")', timeout=10000)
@@ -327,34 +358,67 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
         page.wait_for_timeout(2000)
         log("✅ Opdrachtenpagina geladen.")
 
-    # ── URL verzameling ──────────────────────────────────────────────────────
-    def verzamel_opdracht_urls(page):
-        log("🔍 Alle opdracht-URLs verzamelen via scrollen...")
+    def verzamel_opdracht_urls(page, stop_bij_link: Optional[str] = None) -> List[str]:
+        """
+        Verzamelt opdracht-URLs van nieuw naar oud.
+        Als stop_bij_link is opgegeven, worden alleen URLs boven die link meegenomen.
+        Zodra die link gevonden is, stopt de lijstopbouw.
+        """
+        stop_bij_link_norm = normaliseer_url(stop_bij_link)
+        gebruik_stop_link = bool(stop_bij_link_norm)
+
+        if gebruik_stop_link:
+            log("🔍 Opdracht-URLs verzamelen tot aan laatst verwerkte link...")
+            log(f"⛔ Stop-link ingesteld: {stop_bij_link_norm}")
+        else:
+            log("🔍 Alle opdracht-URLs verzamelen via scrollen...")
+
         alle_urls = []
         gevonden_set = set()
-        scroll_stap, scroll_pos = 150, 0
-        geen_nieuw, max_geen_nieuw = 0, 8
+        stop_link_gevonden = False
 
-        while geen_nieuw < max_geen_nieuw:
+        scroll_stap = 150
+        scroll_pos = 0
+        geen_nieuw = 0
+        max_geen_nieuw = 8
+
+        while geen_nieuw < max_geen_nieuw and not stop_link_gevonden:
             items = page.locator('[data-testid="jobRequestListItem"]').all()
-            voor = len(gevonden_set)
+            aantal_voor = len(gevonden_set)
 
             for item in items:
                 try:
-                    href = item.get_attribute('href') or item.locator('a').first.get_attribute('href')
-                    if href:
-                        if href.startswith('/'):
-                            volledige_href = 'https://supplier.striive.com' + href
-                        else:
-                            volledige_href = href
+                    href = item.get_attribute('href')
+                    if not href:
+                        href = item.locator('a').first.get_attribute('href')
 
-                        if volledige_href not in gevonden_set:
-                            gevonden_set.add(volledige_href)
-                            alle_urls.append(volledige_href)
+                    if not href:
+                        continue
+
+                    volledige_href = (
+                        f"https://supplier.striive.com{href}"
+                        if href.startswith("/")
+                        else href
+                    )
+                    volledige_href_norm = normaliseer_url(volledige_href)
+
+                    if volledige_href_norm == stop_bij_link_norm and gebruik_stop_link:
+                        stop_link_gevonden = True
+                        log("🛑 Laatst verwerkte link bereikt. Oudere opdrachten worden overgeslagen.")
+                        break
+
+                    if volledige_href_norm not in gevonden_set:
+                        gevonden_set.add(volledige_href_norm)
+                        alle_urls.append(volledige_href_norm)
+
                 except Exception:
-                    pass
+                    continue
+
+            if stop_link_gevonden:
+                break
 
             scroll_pos += scroll_stap
+
             try:
                 res = page.evaluate(f"""
                     () => {{
@@ -380,21 +444,26 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
             page.wait_for_timeout(1000)
 
-            geen_nieuw = 0 if len(gevonden_set) > voor else geen_nieuw + 1
+            if len(gevonden_set) > aantal_voor:
+                geen_nieuw = 0
+            else:
+                geen_nieuw += 1
 
-            max_scroll = res['scrollHeight'] - res['clientHeight']
-            if max_scroll > 0 and res['scrollTop'] >= max_scroll - 10:
-                log(f"📋 Einde van lijst bereikt. Totaal: {len(alle_urls)} opdrachten.")
+            max_scroll = res["scrollHeight"] - res["clientHeight"]
+            if max_scroll > 0 and res["scrollTop"] >= max_scroll - 10:
+                log(f"📋 Einde van lijst bereikt. Totaal verzameld: {len(alle_urls)} opdrachten.")
                 break
 
-        log(f"📋 Totaal {len(alle_urls)} opdrachten gevonden.")
+        if gebruik_stop_link and not stop_link_gevonden:
+            log("⚠️ Stop-link niet gevonden in de huidige lijst. Alle gevonden opdrachten worden verwerkt.")
+
+        log(f"📋 Totaal {len(alle_urls)} opdrachten geselecteerd voor verwerking.")
         return alle_urls
 
-    # ── Streamlit sessie aanmaken ────────────────────────────────────────────
     def maak_streamlit_sessie(browser):
         """
         Open een nieuwe Streamlit-tab, log in en klik de juiste tab.
-        Wacht langer zodat de app volledig opstaat na een 'koude start'.
+        Wacht langer zodat de app volledig opstaat na een koude start.
         """
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(
@@ -402,15 +471,14 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
             wait_until="domcontentloaded",
             timeout=60000,
         )
-        # Langere wachttijd: Streamlit Cloud free tier heeft soms 20+ seconden nodig
         page.wait_for_timeout(20000)
 
-        frame = page.frame_locator('iframe').first
+        frame = page.frame_locator("iframe").first
 
         try:
-            pw = frame.locator('input[type="password"]').first
-            if pw.is_visible(timeout=5000):
-                pw.fill(credentials["streamlit_pw"])
+            wachtwoord_veld = frame.locator('input[type="password"]').first
+            if wachtwoord_veld.is_visible(timeout=5000):
+                wachtwoord_veld.fill(credentials["streamlit_pw"])
                 frame.locator('button:has-text("Log in")').first.click()
                 page.wait_for_timeout(15000)
                 log("  🔑 Streamlit ingelogd.")
@@ -426,53 +494,47 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
         except Exception:
             pass
 
-        # Wacht tot de textarea zichtbaar is voor we verdergaan
         try:
-            frame.locator('textarea').first.wait_for(state="visible", timeout=30000)
+            frame.locator("textarea").first.wait_for(state="visible", timeout=30000)
             log("  ✅ Streamlit-sessie klaar.")
         except Exception:
             log("  ⚠️ Textarea nog niet zichtbaar na sessie-aanmaak, doorgaan...")
 
         return page
 
-    # ── Streamlit analyse ────────────────────────────────────────────────────
     def analyseer_in_streamlit(streamlit_page, browser, tekst, max_retries=2):
         """
         Hergebruikt een bestaande Streamlit-pagina.
-        Bij fout: sluit de huidige pagina en maak een NIEUWE sessie aan
-        (betrouwbaarder dan herladen bij Streamlit Cloud free tier).
-        Geeft (resultaten, streamlit_page) terug zodat de beller
-        de nieuwe pagina kan bijhouden.
+        Bij fout: sluit de huidige pagina en maak een nieuwe sessie aan.
+        Geeft (resultaten, streamlit_page) terug.
         """
         huidige_pagina = streamlit_page
 
         for poging in range(1, max_retries + 1):
-            frame = huidige_pagina.frame_locator('iframe').first
+            frame = huidige_pagina.frame_locator("iframe").first
+
             try:
-                # Textarea invullen
-                ta = frame.locator('textarea').first
-                ta.wait_for(state="visible", timeout=30000)
-                ta.click(timeout=10000)
-                ta.fill("")
-                ta.fill(tekst)
+                textarea = frame.locator("textarea").first
+                textarea.wait_for(state="visible", timeout=30000)
+                textarea.click(timeout=10000)
+                textarea.fill("")
+                textarea.fill(tekst)
                 log(f"  ✍️ Tekst ingevuld (poging {poging}).")
 
                 huidige_pagina.wait_for_timeout(2000)
                 frame.locator('button:has-text("Analyseer geschiktheid")').first.click()
                 log("  ⏳ Analyse gestart...")
 
-                # FIX 1: .first voorkomt strict mode violation wanneer het woord
-                # "Resultaten" meerdere keren op de pagina voorkomt (bv. in CV-teksten)
-                frame.locator('text=Resultaten').first.wait_for(timeout=90000)
+                frame.locator("text=Resultaten").first.wait_for(timeout=90000)
                 huidige_pagina.wait_for_timeout(5000)
 
-                # Resultaten uitlezen
                 resultaten = []
-                n_exp = frame.locator('[data-testid="stExpander"]').count()
+                aantal_expanders = frame.locator('[data-testid="stExpander"]').count()
 
-                for j in range(n_exp):
+                for i in range(aantal_expanders):
                     try:
-                        blok = frame.locator('[data-testid="stExpander"]').nth(j)
+                        blok = frame.locator('[data-testid="stExpander"]').nth(i)
+
                         try:
                             blok.locator('summary, [data-testid="stExpanderToggleIcon"], button').first.click(timeout=5000)
                             huidige_pagina.wait_for_timeout(1000)
@@ -480,13 +542,13 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                             pass
 
                         blok_tekst = blok.inner_text(timeout=15000)
-                        score_m = re.search(r'(\d+)/100', blok_tekst)
-                        if not score_m:
+                        score_match = re.search(r'(\d+)/100', blok_tekst)
+                        if not score_match:
                             continue
 
-                        score = int(score_m.group(1))
-                        naam_m = re.search(r'[🟢🟡🔴]\s*(.*?)\s*—\s*\d+/100', blok_tekst)
-                        naam = naam_m.group(1).strip() if naam_m else "onbekend"
+                        score = int(score_match.group(1))
+                        naam_match = re.search(r'[🟢🟡🔴]\s*(.*?)\s*—\s*\d+/100', blok_tekst)
+                        naam = naam_match.group(1).strip() if naam_match else "onbekend"
 
                         resultaten.append((naam, score))
                         log(f"  👤 {naam} → {score}/100")
@@ -500,8 +562,6 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                 log(f"  ⚠️ Streamlit fout (poging {poging}/{max_retries}): {e}")
 
                 if poging < max_retries:
-                    # FIX 2: sluit kapotte pagina en open een volledig nieuwe sessie
-                    # (reload is onbetrouwbaar op Streamlit Cloud free tier)
                     log("  🔄 Kapotte sessie sluiten, nieuwe Streamlit-sessie aanmaken...")
                     try:
                         huidige_pagina.close()
@@ -510,8 +570,8 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
                     try:
                         huidige_pagina = maak_streamlit_sessie(browser)
-                    except Exception as nieuw_err:
-                        log(f"  ❌ Nieuwe sessie aanmaken mislukt: {nieuw_err}")
+                    except Exception as nieuwe_sessie_fout:
+                        log(f"  ❌ Nieuwe sessie aanmaken mislukt: {nieuwe_sessie_fout}")
                         break
 
         log("  ❌ Analyse opgegeven na alle pogingen.")
@@ -523,8 +583,6 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
     batch_grootte = 5
 
     with sync_playwright() as p:
-
-        # Stap 1: URLs ophalen via aparte browser
         alle_urls = []
         init_browser = None
 
@@ -535,7 +593,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
-                ]
+                ],
             )
 
             init_page = init_browser.new_page(viewport={"width": 1280, "height": 800})
@@ -544,7 +602,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
             login_striive(init_page)
             ga_naar_opdrachten(init_page)
-            alle_urls = verzamel_opdracht_urls(init_page)
+            alle_urls = verzamel_opdracht_urls(init_page, stop_bij_link=laatst_verwerkte_link)
 
         finally:
             try:
@@ -554,17 +612,17 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                 pass
 
         if not alle_urls:
-            log("⚠️ Geen opdrachten gevonden.")
+            log("⚠️ Geen nieuwe opdrachten gevonden om te verwerken.")
             return []
 
         totaal = len(alle_urls)
         verwerkt = 0
 
-        # Stap 2: Batches verwerken
-        for batch_nr, batch_urls in enumerate(chunks(alle_urls, batch_grootte), start=1):
+        for batch_nummer, batch_urls in enumerate(chunks(alle_urls, batch_grootte), start=1):
             batch_browser = None
             streamlit_page = None
-            log(f"\n📦 Start batch {batch_nr} ({len(batch_urls)} opdrachten)")
+
+            log(f"\n📦 Start batch {batch_nummer} ({len(batch_urls)} opdrachten)")
 
             try:
                 batch_browser = p.chromium.launch(
@@ -573,17 +631,16 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                         "--no-sandbox",
                         "--disable-dev-shm-usage",
                         "--disable-gpu",
-                    ]
+                    ],
                 )
 
-                batch_browser.on("disconnected", lambda: log(f"🔌 Batch-browser {batch_nr} disconnected"))
+                batch_browser.on("disconnected", lambda: log(f"🔌 Batch-browser {batch_nummer} disconnected"))
 
                 striive_page = batch_browser.new_page(viewport={"width": 1280, "height": 800})
-                striive_page.on("crash", lambda: log(f"💥 Striive-page crash in batch {batch_nr}"))
+                striive_page.on("crash", lambda: log(f"💥 Striive-page crash in batch {batch_nummer}"))
 
                 login_striive(striive_page)
 
-                # Één Streamlit-sessie voor de hele batch
                 log("  🌐 Streamlit-sessie openen voor batch...")
                 streamlit_page = maak_streamlit_sessie(batch_browser)
 
@@ -596,7 +653,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                         striive_page.goto(url, wait_until="domcontentloaded", timeout=60000)
                         striive_page.wait_for_timeout(2000)
 
-                        tekst = striive_page.locator('app-job-request-details').inner_text(timeout=15000)
+                        tekst = striive_page.locator("app-job-request-details").inner_text(timeout=15000)
 
                         uurtarief = extraheer_uurtarief(tekst)
                         startdatum = extraheer_startdatum(tekst)
@@ -604,13 +661,12 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
                         log(f"  💶 {uurtarief} | 📅 {startdatum} | ⏰ {deadline}")
 
-                        # Cooldown om Streamlit niet te overbelasten
                         time.sleep(COOLDOWN_SECONDEN)
 
-                        # streamlit_page wordt teruggegeven zodat we de (eventueel
-                        # vernieuwde) pagina bijhouden na een retry
                         kandidaten, streamlit_page = analyseer_in_streamlit(
-                            streamlit_page, batch_browser, tekst
+                            streamlit_page,
+                            batch_browser,
+                            tekst,
                         )
 
                         for naam, score in kandidaten:
@@ -633,7 +689,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                         continue
 
             except Exception as e:
-                log(f"❌ Batch {batch_nr} gecrasht: {e}")
+                log(f"❌ Batch {batch_nummer} gecrasht: {e}")
                 for url in batch_urls:
                     if url not in mislukte_urls:
                         mislukte_urls.append(url)
@@ -645,13 +701,14 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                         log("  📕 Streamlit-sessie gesloten.")
                 except Exception:
                     pass
+
                 try:
                     if batch_browser:
                         batch_browser.close()
                 except Exception:
                     pass
 
-                log(f"📦 Batch {batch_nr} afgesloten.")
+                log(f"📦 Batch {batch_nummer} afgesloten.")
 
                 if batch_done_fn:
                     batch_done_fn()
@@ -664,13 +721,15 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
 
 # ─── Session State initialisatie ──────────────────────────────────────────────
-for key, default in [
-    ("matches", []),
-    ("logs", []),
-    ("bezig", False),
-    ("klaar", False),
-    ("voortgang", (0, 0)),
-]:
+defaults = {
+    "matches": [],
+    "logs": [],
+    "bezig": False,
+    "klaar": False,
+    "voortgang": (0, 0),
+}
+
+for key, default in defaults.items():
     if key not in st.session_state:
         st.session_state[key] = default
 
@@ -686,6 +745,7 @@ with col_titel:
             Automatisch opdrachten ophalen, analyseren en de beste kandidaten vinden.
         </p>
     """, unsafe_allow_html=True)
+
 st.markdown("---")
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
@@ -693,9 +753,24 @@ with st.sidebar:
     st.markdown("### 🔐 Inloggegevens")
     email = st.text_input("Striive e-mailadres", value="info@inthearena.nl")
     ww = st.text_input("Striive wachtwoord", type="password", value="InTheArena2@22")
+
     st.markdown("---")
     st.markdown("### 🤖 CV-tool")
     streamlit_pw = st.text_input("Streamlit wachtwoord", type="password", value="InTheArenaBV")
+
+    st.markdown("---")
+    st.markdown("### 🧷 Laatst verwerkte opdracht")
+    laatst_verwerkte_link = st.text_input(
+        "Link van de meest recent behandelde opdracht",
+        value="",
+        placeholder="https://supplier.striive.com/job-requests/...",
+        help=(
+            "Plak hier de link van de laatst verwerkte opdracht. "
+            "Alleen opdrachten die boven deze link staan worden meegenomen. "
+            "Laat leeg om alles te scannen."
+        ),
+    )
+
     st.markdown("---")
     st.markdown("### ⚙️ Instellingen")
     drempel = st.slider(
@@ -704,8 +779,9 @@ with st.sidebar:
         max_value=95,
         value=80,
         step=5,
-        help="Alleen kandidaten boven deze score worden opgenomen."
+        help="Alleen kandidaten boven deze score worden opgenomen.",
     )
+
     st.markdown("---")
     if isinstance(_playwright_status, dict) and _playwright_status.get("returncode") == 0:
         st.success("✅ Playwright Chromium klaar.", icon="✅")
@@ -715,7 +791,8 @@ with st.sidebar:
             st.code(_playwright_status.get("stderr") or _playwright_status.get("stdout") or "Onbekende fout")
         else:
             st.code(str(_playwright_status))
-    st.caption("v1.2 · In The Arena BV")
+
+    st.caption("v1.3 · In The Arena BV")
 
 # ─── Hoofd kolommen ───────────────────────────────────────────────────────────
 col_links, col_rechts = st.columns([3, 2], gap="large")
@@ -747,11 +824,11 @@ def render_resultaten():
     import pandas as pd
 
     with metrics_placeholder.container():
-        m1, m2, m3 = st.columns(3)
-        ged, tot = st.session_state.voortgang
-        m1.metric("Verwerkt", f"{ged}/{tot}" if tot else "0/0")
-        m2.metric("Matches", len(st.session_state.matches))
-        m3.metric("Drempelwaarde", f"{drempel}/100")
+        metric_1, metric_2, metric_3 = st.columns(3)
+        verwerkt, totaal = st.session_state.voortgang
+        metric_1.metric("Verwerkt", f"{verwerkt}/{totaal}" if totaal else "0/0")
+        metric_2.metric("Matches", len(st.session_state.matches))
+        metric_3.metric("Drempelwaarde", f"{drempel}/100")
 
     resultaat_placeholder.empty()
 
@@ -760,7 +837,9 @@ def render_resultaten():
             df = pd.DataFrame(st.session_state.matches)
             df_weergave = df[["opdracht", "naam", "score", "uurtarief", "startdatum", "deadline"]].copy()
             df_weergave.columns = ["Opdracht", "Kandidaat", "Score", "Uurtarief", "Startdatum", "Reageren t/m"]
-            df_weergave["CV Herschrijven"] = "https://chatgpt.com/g/g-692562722fd48191a45a59eef67f00f2-inthearena-cv-builder"
+            df_weergave["CV Herschrijven"] = (
+                "https://chatgpt.com/g/g-692562722fd48191a45a59eef67f00f2-inthearena-cv-builder"
+            )
 
             st.dataframe(
                 df_weergave,
@@ -789,7 +868,7 @@ def render_resultaten():
         else:
             st.markdown(
                 "<p style='color:#8b949e;font-size:14px'>Nog geen resultaten. Start de analyse via de knop hieronder.</p>",
-                unsafe_allow_html=True
+                unsafe_allow_html=True,
             )
 
 
@@ -797,15 +876,15 @@ def render_log():
     log_tekst = "\n".join(st.session_state.logs[-60:])
     log_placeholder.markdown(
         f"<div class='log-box'>{log_tekst}</div>",
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
 
 def render_progress():
-    ged, tot = st.session_state.voortgang
+    verwerkt, totaal = st.session_state.voortgang
     if st.session_state.bezig:
-        if tot:
-            progress_placeholder.progress(ged / tot, text=f"Verwerken {ged} van {tot} opdrachten...")
+        if totaal:
+            progress_placeholder.progress(verwerkt / totaal, text=f"Verwerken {verwerkt} van {totaal} opdrachten...")
         else:
             progress_placeholder.info("Bezig met opstarten...")
     else:
@@ -857,11 +936,12 @@ if start_knop:
 
         try:
             matches = run_scraper(
-                credentials,
-                drempel,
-                log_fn,
-                progress_fn,
-                result_fn,
+                credentials=credentials,
+                drempel=drempel,
+                laatst_verwerkte_link=laatst_verwerkte_link,
+                log_fn=log_fn,
+                progress_fn=progress_fn,
+                result_fn=result_fn,
                 batch_done_fn=batch_done_fn,
             )
             st.session_state.matches = matches
