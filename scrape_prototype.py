@@ -265,7 +265,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
 
         # ── Inloggen ──────────────────────────────────────────────────────────
         log("🔐 Inloggen op Striive...")
-        page.("https://login.striive.com/", wait_until="domcontentloaded", timeout=60000)
+        page.goto("https://login.striive.com/", wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(3000)
 
         # E-mailveld: probeer meerdere selectors
@@ -337,7 +337,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
             page.click('a:has-text("Opdrachten")', timeout=10000)
         except:
             # Probeer via directe URL
-            page.("https://supplier.striive.com/job-requests")
+            page.goto("https://supplier.striive.com/job-requests")
 
         page.wait_for_selector('[data-testid="jobRequestListItem"]', timeout=30000)
         page.wait_for_timeout(2000)
@@ -396,7 +396,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
             log(f"\n[{i+1}/{len(alle_urls)}] {url}")
 
             try:
-                page.(url)
+                page.goto(url)
                 page.wait_for_timeout(2000)
                 tekst = page.locator('app-job-request-details').inner_text(timeout=15000)
             except Exception as e:
