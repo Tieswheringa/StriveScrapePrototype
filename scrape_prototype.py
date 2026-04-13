@@ -218,7 +218,7 @@ def maak_excel(matches: list) -> bytes:
         cell.alignment = Alignment(horizontal="center")
 
     breedte = [12, 25, 10, 15, 18, 18, 50]
-    for i, b in enumerate(breedte, 1):
+    , b in enumerate(breedte, 1):
         ws.column_dimensions[ws.cell(1, i).column_letter].width = b
 
     for r, m in enumerate(matches, 2):
@@ -411,41 +411,61 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
             # ── Naar Streamlit CV-tool ─────────────────────────────────────────
             # ── Naar Streamlit CV-tool ─────────────────────────────────────────
             # Herlaad de pagina elke keer zodat de app in begintoestand is
+            # ── Naar Streamlit CV-tool ─────────────────────────────────────────
             page.goto("https://inthearenabv-cv-tool.streamlit.app/")
-            page.wait_for_timeout(8000)
+            page.wait_for_timeout(10000)
             frame = page.frame_locator('iframe').first
             
             if not streamlit_ingelogd:
                 try:
                     pw = frame.locator('input[type="password"]')
-                    if pw.is_visible(timeout=5000):
+                    if pw.is_visible(timeout=8000):
                         pw.fill(credentials["streamlit_pw"])
                         frame.locator('button:has-text("Log in")').click()
-                        page.wait_for_timeout(10000)
+                        page.wait_for_timeout(12000)
                         streamlit_ingelogd = True
                         log("  🔑 Streamlit ingelogd.")
                 except:
                     streamlit_ingelogd = True
             
-            # Klik op "Test geschiktheid opdracht" als die knop bestaat
-            try:
-                frame.locator('button:has-text("Test geschiktheid opdracht")').click(timeout=10000)
-                page.wait_for_timeout(5000)
-                log("  🖱️ Tab 'Test geschiktheid' geopend.")
-            except:
-                pass
+            # Probeer textarea te bereiken, met retry via tab-knop
+            textarea_gevonden = False
+            ta = None
+            for poging in range(4):
+                # Als textarea nog niet zichtbaar is, klik de tab-knop
+                try:
+                    zichtbaar = frame.locator('textarea').first.is_visible()
+                except:
+                    zichtbaar = False
             
-            # Wacht expliciet tot de textarea zichtbaar is
+                if not zichtbaar:
+                    try:
+                        frame.locator('button:has-text("Test geschiktheid opdracht")').click(timeout=8000)
+                        page.wait_for_timeout(4000)
+                        log(f"  🖱️ Tab geklikt (poging {poging+1})")
+                    except:
+                        page.wait_for_timeout(3000)
+            
+                try:
+                    ta = frame.locator('textarea').first
+                    ta.wait_for(state="visible", timeout=15000)
+                    textarea_gevonden = True
+                    log(f"  ✍️ Textarea gevonden op poging {poging+1}")
+                    break
+                except:
+                    continue
+            
+            if not textarea_gevonden:
+                log("  ⚠️ Textarea niet gevonden na 4 pogingen, opdracht overgeslagen.")
+                continue
+            
             try:
-                ta = frame.locator('textarea').first
-                ta.wait_for(state="visible", timeout=60000)  # wacht tot hij zichtbaar is
                 ta.click(timeout=10000)
                 ta.fill("")
                 ta.fill(tekst)
             except Exception as e:
                 log(f"  ⚠️ Kon tekst niet invullen: {e}")
                 continue
-
             page.wait_for_timeout(3000)
             frame.locator('button:has-text("Analyseer geschiktheid")').click()
             log("  ⏳ Analyse gestart...")
