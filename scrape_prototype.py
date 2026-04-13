@@ -15,7 +15,6 @@ os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PLAYWRIGHT_BROWSERS_DIR
 @st.cache_resource(show_spinner="Playwright-browsers installeren (eenmalig)...")
 def installeer_playwright():
     os.makedirs(PLAYWRIGHT_BROWSERS_DIR, exist_ok=True)
-
     try:
         result = subprocess.run(
             [sys.executable, "-m", "playwright", "install", "chromium"],
@@ -30,11 +29,7 @@ def installeer_playwright():
             "stderr": result.stderr,
         }
     except Exception as e:
-        return {
-            "returncode": 1,
-            "stdout": "",
-            "stderr": str(e),
-        }
+        return {"returncode": 1, "stdout": "", "stderr": str(e)}
 
 _playwright_status = installeer_playwright()
 
@@ -44,106 +39,37 @@ if _playwright_status["returncode"] != 0:
     st.stop()
 
 # ─── Pagina-configuratie ───────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Striive Matcher",
-    page_icon="⚡",
-    layout="wide",
-)
+st.set_page_config(page_title="Striive Matcher", page_icon="⚡", layout="wide")
 
 # ─── CSS ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600;700&display=swap');
-
-html, body, [class*="css"] {
-    font-family: 'IBM Plex Sans', sans-serif;
-}
-
-.stApp {
-    background-color: #0f1117;
-    color: #e0e0e0;
-}
-
-section[data-testid="stSidebar"] {
-    background-color: #161b22;
-    border-right: 1px solid #2d333b;
-}
-
-h1, h2, h3 {
-    font-family: 'IBM Plex Mono', monospace !important;
-    letter-spacing: -0.5px;
-}
-
+html, body, [class*="css"] { font-family: 'IBM Plex Sans', sans-serif; }
+.stApp { background-color: #0f1117; color: #e0e0e0; }
+section[data-testid="stSidebar"] { background-color: #161b22; border-right: 1px solid #2d333b; }
+h1, h2, h3 { font-family: 'IBM Plex Mono', monospace !important; letter-spacing: -0.5px; }
 .stButton > button {
-    background-color: #238636;
-    color: #ffffff;
-    border: none;
-    border-radius: 6px;
-    font-family: 'IBM Plex Mono', monospace;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-    padding: 0.6rem 1.4rem;
-    transition: background-color 0.2s ease;
+    background-color: #238636; color: #ffffff; border: none; border-radius: 6px;
+    font-family: 'IBM Plex Mono', monospace; font-weight: 600; letter-spacing: 0.5px;
+    padding: 0.6rem 1.4rem; transition: background-color 0.2s ease;
 }
-.stButton > button:hover {
-    background-color: #2ea043;
-}
-
+.stButton > button:hover { background-color: #2ea043; }
 div[data-testid="metric-container"] {
-    background-color: #161b22;
-    border: 1px solid #2d333b;
-    border-radius: 8px;
-    padding: 1rem 1.2rem;
+    background-color: #161b22; border: 1px solid #2d333b; border-radius: 8px; padding: 1rem 1.2rem;
 }
-
-.stDataFrame {
-    border: 1px solid #2d333b;
-    border-radius: 8px;
-}
-
+.stDataFrame { border: 1px solid #2d333b; border-radius: 8px; }
 .log-box {
-    background-color: #0d1117;
-    border: 1px solid #2d333b;
-    border-radius: 8px;
-    padding: 1rem;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 12px;
-    color: #8b949e;
-    height: 260px;
-    overflow-y: auto;
-    white-space: pre-wrap;
+    background-color: #0d1117; border: 1px solid #2d333b; border-radius: 8px; padding: 1rem;
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #8b949e;
+    height: 260px; overflow-y: auto; white-space: pre-wrap;
 }
-
-.badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    font-family: 'IBM Plex Mono', monospace;
-}
-.badge-green  { background-color: #1a4731; color: #3fb950; }
-.badge-yellow { background-color: #3d2f00; color: #d29922; }
-.badge-red    { background-color: #3d1a1a; color: #f85149; }
-
-.stSlider label {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 13px;
-    color: #8b949e;
-}
-
+.stSlider label { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #8b949e; }
 .stDownloadButton > button {
-    background-color: #1f6feb;
-    color: #ffffff;
-    border: none;
-    border-radius: 6px;
-    font-family: 'IBM Plex Mono', monospace;
-    font-weight: 600;
+    background-color: #1f6feb; color: #ffffff; border: none; border-radius: 6px;
+    font-family: 'IBM Plex Mono', monospace; font-weight: 600;
 }
-.stDownloadButton > button:hover {
-    background-color: #388bfd;
-}
-
+.stDownloadButton > button:hover { background-color: #388bfd; }
 hr { border-color: #2d333b; }
 </style>
 """, unsafe_allow_html=True)
@@ -235,11 +161,8 @@ def maak_excel(matches: list) -> bytes:
 
 
 def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn, batch_done_fn=None):
-    """Voert de scrape uit in batches en werkt UI tussendoor bij."""
     from playwright.sync_api import sync_playwright
 
-    # Cooldown in seconden tussen Streamlit-analyses.
-    # Verhoog naar 5-8 als de time-outs aanhouden.
     COOLDOWN_SECONDEN = 3
 
     def log(msg):
@@ -256,13 +179,9 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
         page.wait_for_timeout(3000)
 
         email_selectors = [
-            'input[type="email"]',
-            'input[name="email"]',
-            '#email',
-            'input[id="email"]',
-            'input[placeholder*="mail" i]',
-            'input[autocomplete="email"]',
-            'input[autocomplete="username"]',
+            'input[type="email"]', 'input[name="email"]', '#email',
+            'input[id="email"]', 'input[placeholder*="mail" i]',
+            'input[autocomplete="email"]', 'input[autocomplete="username"]',
         ]
         email_veld = None
         for sel in email_selectors:
@@ -280,7 +199,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                 page.screenshot(path="/tmp/debug_login.png", full_page=True)
             except Exception:
                 pass
-            raise Exception("E-mailveld niet gevonden. Screenshot opgeslagen in /tmp/debug_login.png")
+            raise Exception("E-mailveld niet gevonden.")
 
         email_veld.click()
         email_veld.fill(credentials["email"])
@@ -290,13 +209,8 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
         ww_veld.click()
         ww_veld.fill(credentials["wachtwoord"])
 
-        login_selectors = [
-            'button:has-text("Login")',
-            'button:has-text("Inloggen")',
-            'button[type="submit"]',
-            'input[type="submit"]',
-        ]
-        for sel in login_selectors:
+        for sel in ['button:has-text("Login")', 'button:has-text("Inloggen")',
+                    'button[type="submit"]', 'input[type="submit"]']:
             try:
                 knop = page.locator(sel).first
                 knop.wait_for(state="visible", timeout=4000)
@@ -321,8 +235,8 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
         try:
             page.click('a:has-text("Opdrachten")', timeout=10000)
         except Exception:
-            page.goto("https://supplier.striive.com/job-requests", wait_until="domcontentloaded", timeout=60000)
-
+            page.goto("https://supplier.striive.com/job-requests",
+                      wait_until="domcontentloaded", timeout=60000)
         page.wait_for_selector('[data-testid="jobRequestListItem"]', timeout=30000)
         page.wait_for_timeout(2000)
         log("✅ Opdrachtenpagina geladen.")
@@ -343,11 +257,8 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                 try:
                     href = item.get_attribute('href') or item.locator('a').first.get_attribute('href')
                     if href:
-                        if href.startswith('/'):
-                            volledige_href = 'https://supplier.striive.com' + href
-                        else:
-                            volledige_href = href
-
+                        volledige_href = ('https://supplier.striive.com' + href
+                                          if href.startswith('/') else href)
                         if volledige_href not in gevonden_set:
                             gevonden_set.add(volledige_href)
                             alle_urls.append(volledige_href)
@@ -361,25 +272,16 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                         const s = document.querySelector('div.p-scroller');
                         if (s) {{
                             s.scrollTop = {scroll_pos};
-                            return {{
-                                scrollTop: s.scrollTop,
-                                scrollHeight: s.scrollHeight,
-                                clientHeight: s.clientHeight
-                            }};
+                            return {{ scrollTop: s.scrollTop, scrollHeight: s.scrollHeight, clientHeight: s.clientHeight }};
                         }}
                         window.scrollTo(0, {scroll_pos});
-                        return {{
-                            scrollTop: window.scrollY,
-                            scrollHeight: document.body.scrollHeight,
-                            clientHeight: window.innerHeight
-                        }};
+                        return {{ scrollTop: window.scrollY, scrollHeight: document.body.scrollHeight, clientHeight: window.innerHeight }};
                     }}
                 """)
             except Exception:
                 res = {"scrollTop": 0, "scrollHeight": 0, "clientHeight": 0}
 
             page.wait_for_timeout(1000)
-
             geen_nieuw = 0 if len(gevonden_set) > voor else geen_nieuw + 1
 
             max_scroll = res['scrollHeight'] - res['clientHeight']
@@ -392,17 +294,9 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
     # ── Streamlit sessie aanmaken ────────────────────────────────────────────
     def maak_streamlit_sessie(browser):
-        """
-        Open een nieuwe Streamlit-tab, log in en klik de juiste tab.
-        Wacht langer zodat de app volledig opstaat na een 'koude start'.
-        """
         page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(
-            "https://inthearenabv-cv-tool.streamlit.app/",
-            wait_until="domcontentloaded",
-            timeout=60000,
-        )
-        # Langere wachttijd: Streamlit Cloud free tier heeft soms 20+ seconden nodig
+        page.goto("https://inthearenabv-cv-tool.streamlit.app/",
+                  wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(20000)
 
         frame = page.frame_locator('iframe').first
@@ -426,7 +320,6 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
         except Exception:
             pass
 
-        # Wacht tot de textarea zichtbaar is voor we verdergaan
         try:
             frame.locator('textarea').first.wait_for(state="visible", timeout=30000)
             log("  ✅ Streamlit-sessie klaar.")
@@ -437,19 +330,12 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
     # ── Streamlit analyse ────────────────────────────────────────────────────
     def analyseer_in_streamlit(streamlit_page, browser, tekst, max_retries=2):
-        """
-        Hergebruikt een bestaande Streamlit-pagina.
-        Bij fout: sluit de huidige pagina en maak een NIEUWE sessie aan
-        (betrouwbaarder dan herladen bij Streamlit Cloud free tier).
-        Geeft (resultaten, streamlit_page) terug zodat de beller
-        de nieuwe pagina kan bijhouden.
-        """
         huidige_pagina = streamlit_page
 
         for poging in range(1, max_retries + 1):
             frame = huidige_pagina.frame_locator('iframe').first
             try:
-                # Textarea invullen
+                # ── Stap 1: textarea invullen ────────────────────────────────
                 ta = frame.locator('textarea').first
                 ta.wait_for(state="visible", timeout=30000)
                 ta.click(timeout=10000)
@@ -458,15 +344,40 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                 log(f"  ✍️ Tekst ingevuld (poging {poging}).")
 
                 huidige_pagina.wait_for_timeout(2000)
+
+                # ── Stap 2: tel huidige expanders VOOR het klikken ───────────
+                # Dit is de kern van de fix: we weten hoeveel expanders er nu
+                # zijn (van de vorige analyse), zodat we kunnen wachten tot ze
+                # verdwijnen en nieuwe verschijnen.
+                n_voor = frame.locator('[data-testid="stExpander"]').count()
+
                 frame.locator('button:has-text("Analyseer geschiktheid")').first.click()
                 log("  ⏳ Analyse gestart...")
 
-                # FIX 1: .first voorkomt strict mode violation wanneer het woord
-                # "Resultaten" meerdere keren op de pagina voorkomt (bv. in CV-teksten)
-                frame.locator('text=Resultaten').first.wait_for(timeout=90000)
-                huidige_pagina.wait_for_timeout(5000)
+                # ── Stap 3: wacht tot OUDE expanders verdwijnen ──────────────
+                # Streamlit verwijdert de vorige resultaten zodra de nieuwe run
+                # start. Pas als ze weg zijn, weten we dat de nieuwe analyse
+                # bezig is — en niet dat we de oude resultaten lezen.
+                if n_voor > 0:
+                    log(f"  🔄 Wachten tot {n_voor} oude resultaten verdwijnen...")
+                    try:
+                        # Wacht tot het eerste expander-element detached raakt
+                        frame.locator('[data-testid="stExpander"]').first.wait_for(
+                            state="detached", timeout=30000
+                        )
+                        log("  🔄 Oude resultaten weg, wachten op nieuwe analyse...")
+                    except Exception:
+                        # Als ze niet verdwijnen binnen 30s, gaan we toch door
+                        # (kan bij eerste opdracht in sessie zonder vorige resultaten)
+                        log("  ⚠️ Oude expanders niet verdwenen, toch doorgaan...")
 
-                # Resultaten uitlezen
+                # ── Stap 4: wacht tot NIEUWE expanders verschijnen ───────────
+                frame.locator('[data-testid="stExpander"]').first.wait_for(
+                    state="visible", timeout=90000
+                )
+                huidige_pagina.wait_for_timeout(3000)
+
+                # ── Stap 5: resultaten uitlezen ──────────────────────────────
                 resultaten = []
                 n_exp = frame.locator('[data-testid="stExpander"]').count()
 
@@ -474,7 +385,9 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                     try:
                         blok = frame.locator('[data-testid="stExpander"]').nth(j)
                         try:
-                            blok.locator('summary, [data-testid="stExpanderToggleIcon"], button').first.click(timeout=5000)
+                            blok.locator(
+                                'summary, [data-testid="stExpanderToggleIcon"], button'
+                            ).first.click(timeout=5000)
                             huidige_pagina.wait_for_timeout(1000)
                         except Exception:
                             pass
@@ -500,14 +413,11 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                 log(f"  ⚠️ Streamlit fout (poging {poging}/{max_retries}): {e}")
 
                 if poging < max_retries:
-                    # FIX 2: sluit kapotte pagina en open een volledig nieuwe sessie
-                    # (reload is onbetrouwbaar op Streamlit Cloud free tier)
                     log("  🔄 Kapotte sessie sluiten, nieuwe Streamlit-sessie aanmaken...")
                     try:
                         huidige_pagina.close()
                     except Exception:
                         pass
-
                     try:
                         huidige_pagina = maak_streamlit_sessie(browser)
                     except Exception as nieuw_err:
@@ -524,20 +434,14 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
     with sync_playwright() as p:
 
-        # Stap 1: URLs ophalen via aparte browser
+        # Stap 1: URLs ophalen
         alle_urls = []
         init_browser = None
-
         try:
             init_browser = p.chromium.launch(
                 headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                ]
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
             )
-
             init_page = init_browser.new_page(viewport={"width": 1280, "height": 800})
             init_page.on("crash", lambda: log("💥 Init-page crash gedetecteerd"))
             init_browser.on("disconnected", lambda: log("🔌 Init-browser disconnected"))
@@ -545,7 +449,6 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
             login_striive(init_page)
             ga_naar_opdrachten(init_page)
             alle_urls = verzamel_opdracht_urls(init_page)
-
         finally:
             try:
                 if init_browser:
@@ -569,13 +472,8 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
             try:
                 batch_browser = p.chromium.launch(
                     headless=True,
-                    args=[
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-gpu",
-                    ]
+                    args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
                 )
-
                 batch_browser.on("disconnected", lambda: log(f"🔌 Batch-browser {batch_nr} disconnected"))
 
                 striive_page = batch_browser.new_page(viewport={"width": 1280, "height": 800})
@@ -583,7 +481,6 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
                 login_striive(striive_page)
 
-                # Één Streamlit-sessie voor de hele batch
                 log("  🌐 Streamlit-sessie openen voor batch...")
                 streamlit_page = maak_streamlit_sessie(batch_browser)
 
@@ -604,11 +501,8 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
                         log(f"  💶 {uurtarief} | 📅 {startdatum} | ⏰ {deadline}")
 
-                        # Cooldown om Streamlit niet te overbelasten
                         time.sleep(COOLDOWN_SECONDEN)
 
-                        # streamlit_page wordt teruggegeven zodat we de (eventueel
-                        # vernieuwde) pagina bijhouden na een retry
                         kandidaten, streamlit_page = analyseer_in_streamlit(
                             streamlit_page, batch_browser, tekst
                         )
@@ -652,7 +546,6 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                     pass
 
                 log(f"📦 Batch {batch_nr} afgesloten.")
-
                 if batch_done_fn:
                     batch_done_fn()
 
@@ -665,17 +558,13 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
 # ─── Session State initialisatie ──────────────────────────────────────────────
 for key, default in [
-    ("matches", []),
-    ("logs", []),
-    ("bezig", False),
-    ("klaar", False),
-    ("voortgang", (0, 0)),
+    ("matches", []), ("logs", []), ("bezig", False),
+    ("klaar", False), ("voortgang", (0, 0)),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
 
 # ─── UI ───────────────────────────────────────────────────────────────────────
-
 col_logo, col_titel = st.columns([1, 8])
 with col_logo:
     st.markdown("<div style='font-size:48px;padding-top:8px'>⚡</div>", unsafe_allow_html=True)
@@ -698,14 +587,8 @@ with st.sidebar:
     streamlit_pw = st.text_input("Streamlit wachtwoord", type="password", value="InTheArenaBV")
     st.markdown("---")
     st.markdown("### ⚙️ Instellingen")
-    drempel = st.slider(
-        "Minimale score",
-        min_value=50,
-        max_value=95,
-        value=80,
-        step=5,
-        help="Alleen kandidaten boven deze score worden opgenomen."
-    )
+    drempel = st.slider("Minimale score", min_value=50, max_value=95, value=80, step=5,
+                        help="Alleen kandidaten boven deze score worden opgenomen.")
     st.markdown("---")
     if isinstance(_playwright_status, dict) and _playwright_status.get("returncode") == 0:
         st.success("✅ Playwright Chromium klaar.", icon="✅")
@@ -715,7 +598,7 @@ with st.sidebar:
             st.code(_playwright_status.get("stderr") or _playwright_status.get("stdout") or "Onbekende fout")
         else:
             st.code(str(_playwright_status))
-    st.caption("v1.2 · In The Arena BV")
+    st.caption("v1.3 · In The Arena BV")
 
 # ─── Hoofd kolommen ───────────────────────────────────────────────────────────
 col_links, col_rechts = st.columns([3, 2], gap="large")
@@ -733,11 +616,8 @@ st.markdown("---")
 col_btn, col_status = st.columns([2, 5])
 
 with col_btn:
-    start_knop = st.button(
-        "🚀  Start analyse",
-        disabled=st.session_state.bezig,
-        use_container_width=True,
-    )
+    start_knop = st.button("🚀  Start analyse", disabled=st.session_state.bezig,
+                           use_container_width=True)
 
 with col_status:
     progress_placeholder = st.empty()
@@ -766,8 +646,7 @@ def render_resultaten():
                 df_weergave,
                 column_config={
                     "CV Herschrijven": st.column_config.LinkColumn(
-                        "CV Herschrijven",
-                        display_text="✏️ Open CV Builder",
+                        "CV Herschrijven", display_text="✏️ Open CV Builder"
                     )
                 },
                 use_container_width=True,
@@ -795,10 +674,7 @@ def render_resultaten():
 
 def render_log():
     log_tekst = "\n".join(st.session_state.logs[-60:])
-    log_placeholder.markdown(
-        f"<div class='log-box'>{log_tekst}</div>",
-        unsafe_allow_html=True
-    )
+    log_placeholder.markdown(f"<div class='log-box'>{log_tekst}</div>", unsafe_allow_html=True)
 
 
 def render_progress():
@@ -857,11 +733,7 @@ if start_knop:
 
         try:
             matches = run_scraper(
-                credentials,
-                drempel,
-                log_fn,
-                progress_fn,
-                result_fn,
+                credentials, drempel, log_fn, progress_fn, result_fn,
                 batch_done_fn=batch_done_fn,
             )
             st.session_state.matches = matches
