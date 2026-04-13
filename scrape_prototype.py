@@ -1,6 +1,7 @@
 import os
 import re
 import io
+import time
 import subprocess
 import sys
 import streamlit as st
@@ -248,6 +249,10 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
     """Voert de scrape uit in batches en werkt UI tussendoor bij."""
     from playwright.sync_api import sync_playwright
 
+    # Cooldown in seconden tussen Streamlit-analyses.
+    # Verhoog naar 5-8 als de time-outs aanhouden.
+    COOLDOWN_SECONDEN = 3
+
     def log(msg):
         log_fn(msg)
 
@@ -255,6 +260,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
         for i in range(0, len(lst), size):
             yield lst[i:i + size]
 
+    # ── Striive login ────────────────────────────────────────────────────────
     def login_striive(page):
         log("🔐 Inloggen op Striive...")
         page.goto("https://login.striive.com/", wait_until="domcontentloaded", timeout=60000)
@@ -277,13 +283,13 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                 email_veld = el
                 log(f"  ✔ E-mailveld gevonden: {sel}")
                 break
-            except:
+            except Exception:
                 continue
 
         if email_veld is None:
             try:
                 page.screenshot(path="/tmp/debug_login.png", full_page=True)
-            except:
+            except Exception:
                 pass
             raise Exception("E-mailveld niet gevonden. Screenshot opgeslagen in /tmp/debug_login.png")
 
@@ -308,7 +314,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                 knop.click()
                 log(f"  Login-knop geklikt ({sel}).")
                 break
-            except:
+            except Exception:
                 continue
         else:
             ww_veld.press("Enter")
@@ -316,21 +322,23 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
         try:
             page.wait_for_selector('text=Overzicht', timeout=30000)
-        except:
+        except Exception:
             page.wait_for_url("**/dashboard**", timeout=30000)
 
         log("✅ Ingelogd!")
 
+    # ── Opdrachten pagina ────────────────────────────────────────────────────
     def ga_naar_opdrachten(page):
         try:
             page.click('a:has-text("Opdrachten")', timeout=10000)
-        except:
+        except Exception:
             page.goto("https://supplier.striive.com/job-requests", wait_until="domcontentloaded", timeout=60000)
 
         page.wait_for_selector('[data-testid="jobRequestListItem"]', timeout=30000)
         page.wait_for_timeout(2000)
         log("✅ Opdrachtenpagina geladen.")
 
+    # ── URL verzameling ──────────────────────────────────────────────────────
     def verzamel_opdracht_urls(page):
         log("🔍 Alle opdracht-URLs verzamelen via scrollen...")
         alle_urls = []
@@ -354,7 +362,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                         if volledige_href not in gevonden_set:
                             gevonden_set.add(volledige_href)
                             alle_urls.append(volledige_href)
-                except:
+                except Exception:
                     pass
 
             scroll_pos += scroll_stap
@@ -378,7 +386,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                         }};
                     }}
                 """)
-            except:
+            except Exception:
                 res = {"scrollTop": 0, "scrollHeight": 0, "clientHeight": 0}
 
             page.wait_for_timeout(1000)
@@ -393,96 +401,126 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
         log(f"📋 Totaal {len(alle_urls)} opdrachten gevonden.")
         return alle_urls
 
-    def analyseer_in_streamlit(browser, tekst):
-        resultaten = []
-        streamlit_page = browser.new_page(viewport={"width": 1280, "height": 900})
+    # ── Streamlit sessie aanmaken (eenmalig per batch) ───────────────────────
+    def maak_streamlit_sessie(browser):
+        """Open Streamlit, log in en klik de juiste tab. Geeft de page terug."""
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.goto(
+            "https://inthearenabv-cv-tool.streamlit.app/",
+            wait_until="domcontentloaded",
+            timeout=60000,
+        )
+        page.wait_for_timeout(12000)
+
+        frame = page.frame_locator('iframe').first
 
         try:
-            streamlit_page.goto(
-                "https://inthearenabv-cv-tool.streamlit.app/",
-                wait_until="domcontentloaded",
-                timeout=60000,
-            )
-            streamlit_page.wait_for_timeout(12000)
+            pw = frame.locator('input[type="password"]').first
+            if pw.is_visible(timeout=5000):
+                pw.fill(credentials["streamlit_pw"])
+                frame.locator('button:has-text("Log in")').first.click()
+                page.wait_for_timeout(12000)
+                log("  🔑 Streamlit ingelogd.")
+        except Exception:
+            pass
 
+        try:
+            tab = frame.locator('button:has-text("Test geschiktheid opdracht")').first
+            if tab.is_visible(timeout=5000):
+                tab.click()
+                page.wait_for_timeout(3000)
+                log("  🖱️ Tab geklikt.")
+        except Exception:
+            pass
+
+        return page
+
+    # ── Streamlit analyse (hergebruikt bestaande pagina, met retry) ──────────
+    def analyseer_in_streamlit(streamlit_page, tekst, max_retries=2):
+        """
+        Hergebruikt een bestaande Streamlit-pagina per batch.
+        Bij timeout: laad de pagina opnieuw en probeer nogmaals.
+        """
+        for poging in range(1, max_retries + 1):
             frame = streamlit_page.frame_locator('iframe').first
-
             try:
-                pw = frame.locator('input[type="password"]').first
-                if pw.is_visible(timeout=5000):
-                    pw.fill(credentials["streamlit_pw"])
-                    frame.locator('button:has-text("Log in")').first.click()
-                    streamlit_page.wait_for_timeout(12000)
-                    log("  🔑 Streamlit ingelogd.")
-            except:
-                pass
+                # Textarea invullen
+                ta = frame.locator('textarea').first
+                ta.wait_for(state="visible", timeout=30000)
+                ta.click(timeout=10000)
+                ta.fill("")
+                ta.fill(tekst)
+                log(f"  ✍️ Tekst ingevuld (poging {poging}).")
 
-            try:
-                tab = frame.locator('button:has-text("Test geschiktheid opdracht")').first
-                if tab.is_visible(timeout=5000):
-                    tab.click()
-                    streamlit_page.wait_for_timeout(3000)
-                    log("  🖱️ Tab geklikt.")
-            except:
-                pass
+                streamlit_page.wait_for_timeout(2000)
+                frame.locator('button:has-text("Analyseer geschiktheid")').first.click()
+                log("  ⏳ Analyse gestart...")
 
-            ta = frame.locator('textarea').first
-            ta.wait_for(state="visible", timeout=30000)
-            ta.click(timeout=10000)
-            ta.fill("")
-            ta.fill(tekst)
-            log("  ✍️ Tekst ingevuld.")
+                # Wacht op resultaten
+                frame.locator('text=Resultaten').wait_for(timeout=90000)
+                streamlit_page.wait_for_timeout(5000)
 
-            streamlit_page.wait_for_timeout(2000)
+                # Resultaten uitlezen
+                resultaten = []
+                n_exp = frame.locator('[data-testid="stExpander"]').count()
 
-            frame.locator('button:has-text("Analyseer geschiktheid")').first.click()
-            log("  ⏳ Analyse gestart...")
-
-            frame.locator('text=Resultaten').wait_for(timeout=120000)
-            streamlit_page.wait_for_timeout(5000)
-
-            n_exp = frame.locator('[data-testid="stExpander"]').count()
-
-            for j in range(n_exp):
-                try:
-                    blok = frame.locator('[data-testid="stExpander"]').nth(j)
-
+                for j in range(n_exp):
                     try:
-                        blok.locator('summary, [data-testid="stExpanderToggleIcon"], button').first.click(timeout=5000)
-                        streamlit_page.wait_for_timeout(1000)
-                    except:
-                        pass
+                        blok = frame.locator('[data-testid="stExpander"]').nth(j)
+                        try:
+                            blok.locator('summary, [data-testid="stExpanderToggleIcon"], button').first.click(timeout=5000)
+                            streamlit_page.wait_for_timeout(1000)
+                        except Exception:
+                            pass
 
-                    blok_tekst = blok.inner_text(timeout=15000)
+                        blok_tekst = blok.inner_text(timeout=15000)
+                        score_m = re.search(r'(\d+)/100', blok_tekst)
+                        if not score_m:
+                            continue
 
-                    score_m = re.search(r'(\d+)/100', blok_tekst)
-                    if not score_m:
-                        continue
+                        score = int(score_m.group(1))
+                        naam_m = re.search(r'[🟢🟡🔴]\s*(.*?)\s*—\s*\d+/100', blok_tekst)
+                        naam = naam_m.group(1).strip() if naam_m else "onbekend"
 
-                    score = int(score_m.group(1))
-                    naam_m = re.search(r'[🟢🟡🔴]\s*(.*?)\s*—\s*\d+/100', blok_tekst)
-                    naam = naam_m.group(1).strip() if naam_m else "onbekend"
+                        resultaten.append((naam, score))
+                        log(f"  👤 {naam} → {score}/100")
 
-                    resultaten.append((naam, score))
-                    log(f"  👤 {naam} → {score}/100")
+                    except Exception as e:
+                        log(f"  ⚠️ Kandidaatblok fout: {e}")
 
-                except Exception as e:
-                    log(f"  ⚠️ Kandidaatblok fout: {e}")
+                return resultaten
 
-            return resultaten
+            except Exception as e:
+                log(f"  ⚠️ Streamlit time-out/fout (poging {poging}/{max_retries}): {e}")
+                if poging < max_retries:
+                    log("  🔄 Streamlit-pagina herladen en opnieuw proberen...")
+                    try:
+                        streamlit_page.reload(wait_until="domcontentloaded", timeout=60000)
+                        streamlit_page.wait_for_timeout(10000)
+                        # Na reload: tab opnieuw klikken
+                        frame = streamlit_page.frame_locator('iframe').first
+                        try:
+                            tab = frame.locator('button:has-text("Test geschiktheid opdracht")').first
+                            if tab.is_visible(timeout=5000):
+                                tab.click()
+                                streamlit_page.wait_for_timeout(3000)
+                        except Exception:
+                            pass
+                    except Exception as reload_err:
+                        log(f"  ❌ Herladen mislukt: {reload_err}")
+                        break
 
-        finally:
-            try:
-                streamlit_page.close()
-                log("  📕 Streamlit-tab gesloten.")
-            except:
-                pass
+        log("  ❌ Analyse opgegeven na alle pogingen.")
+        return []
 
+    # ── Hoofd scraper loop ───────────────────────────────────────────────────
     alle_matches = []
     mislukte_urls = []
     batch_grootte = 5
 
     with sync_playwright() as p:
+
+        # Stap 1: URLs ophalen via aparte browser
         alle_urls = []
         init_browser = None
 
@@ -497,7 +535,6 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
             )
 
             init_page = init_browser.new_page(viewport={"width": 1280, "height": 800})
-
             init_page.on("crash", lambda: log("💥 Init-page crash gedetecteerd"))
             init_browser.on("disconnected", lambda: log("🔌 Init-browser disconnected"))
 
@@ -509,7 +546,7 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
             try:
                 if init_browser:
                     init_browser.close()
-            except:
+            except Exception:
                 pass
 
         if not alle_urls:
@@ -519,8 +556,10 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
         totaal = len(alle_urls)
         verwerkt = 0
 
+        # Stap 2: Batches verwerken
         for batch_nr, batch_urls in enumerate(chunks(alle_urls, batch_grootte), start=1):
             batch_browser = None
+            streamlit_page = None
             log(f"\n📦 Start batch {batch_nr} ({len(batch_urls)} opdrachten)")
 
             try:
@@ -540,6 +579,10 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
                 login_striive(striive_page)
 
+                # ✅ Één Streamlit-sessie voor de hele batch (was: per opdracht)
+                log("  🌐 Streamlit-sessie openen voor batch...")
+                streamlit_page = maak_streamlit_sessie(batch_browser)
+
                 for url in batch_urls:
                     verwerkt += 1
                     progress_fn(verwerkt, totaal)
@@ -557,7 +600,10 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
 
                         log(f"  💶 {uurtarief} | 📅 {startdatum} | ⏰ {deadline}")
 
-                        kandidaten = analyseer_in_streamlit(batch_browser, tekst)
+                        # Cooldown om Streamlit niet te overbelasten
+                        time.sleep(COOLDOWN_SECONDEN)
+
+                        kandidaten = analyseer_in_streamlit(streamlit_page, tekst)
 
                         for naam, score in kandidaten:
                             if score > drempel:
@@ -585,10 +631,17 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn,
                         mislukte_urls.append(url)
 
             finally:
+                # Streamlit-pagina netjes sluiten
+                try:
+                    if streamlit_page:
+                        streamlit_page.close()
+                        log("  📕 Streamlit-sessie gesloten.")
+                except Exception:
+                    pass
                 try:
                     if batch_browser:
                         batch_browser.close()
-                except:
+                except Exception:
                     pass
 
                 log(f"📦 Batch {batch_nr} afgesloten.")
@@ -656,7 +709,7 @@ with st.sidebar:
             st.code(_playwright_status.get("stderr") or _playwright_status.get("stdout") or "Onbekende fout")
         else:
             st.code(str(_playwright_status))
-    st.caption("v1.0 · In The Arena BV")
+    st.caption("v1.1 · In The Arena BV")
 
 # ─── Hoofd kolommen ───────────────────────────────────────────────────────────
 col_links, col_rechts = st.columns([3, 2], gap="large")
@@ -694,7 +747,6 @@ def render_resultaten():
         m2.metric("Matches", len(st.session_state.matches))
         m3.metric("Drempelwaarde", f"{drempel}/100")
 
-    # Maak placeholder eerst leeg voordat je opnieuw rendert
     resultaat_placeholder.empty()
 
     with resultaat_placeholder.container():
@@ -716,7 +768,6 @@ def render_resultaten():
                 hide_index=True,
             )
 
-            # Downloadknop alleen tonen als scraper klaar is
             if not st.session_state.bezig:
                 excel_bytes = maak_excel(st.session_state.matches)
                 st.download_button(
