@@ -210,7 +210,7 @@ def maak_excel(matches: list) -> bytes:
     ws.title = "Matches"
 
     headers = ["Opdracht #", "Kandidaat", "Score", "Uurtarief",
-               "Startdatum", "Reageren t/m", "Link naar opdracht", "CV herschrijven]
+               "Startdatum", "Reageren t/m", "Link naar opdracht", "CV herschrijven"]
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
         cell.font = Font(bold=True, color="FFFFFF", name="Arial")
