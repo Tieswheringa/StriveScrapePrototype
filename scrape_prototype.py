@@ -413,33 +413,33 @@ def run_scraper(credentials: dict, drempel: int, log_fn, progress_fn, result_fn)
             # Herlaad de pagina elke keer zodat de app in begintoestand is
             # ── Naar Streamlit CV-tool ─────────────────────────────────────────
             # ── Naar Streamlit CV-tool ─────────────────────────────────────────
+            # ── Naar Streamlit CV-tool ─────────────────────────────────────────
             page.goto("https://inthearenabv-cv-tool.streamlit.app/")
+            page.wait_for_timeout(12000)  # wacht tot Streamlit volledig geladen is
             frame = page.frame_locator('iframe').first
             
-            if not streamlit_ingelogd:
-                try:
-                    pw = frame.locator('input[type="password"]')
-                    if pw.is_visible(timeout=8000):
-                        pw.fill(credentials["streamlit_pw"])
-                        frame.locator('button:has-text("Log in")').click()
-                        page.wait_for_timeout(12000)
-                        streamlit_ingelogd = True
-                        log("  🔑 Streamlit ingelogd.")
-                except:
-                    streamlit_ingelogd = True
-            
-            # Wacht tot Streamlit klaar is met laden (tab-knop zichtbaar)
+            # Login — elke keer proberen (sessie kan verlopen zijn)
             try:
-                tab_knop = frame.locator('button:has-text("Test geschiktheid opdracht")')
-                tab_knop.wait_for(state="visible", timeout=60000)
-                tab_knop.click()
-                page.wait_for_timeout(3000)
-                log("  🖱️ Tab 'Test geschiktheid' geopend.")
-            except Exception as e:
-                log(f"  ⚠️ Tab-knop niet gevonden: {e}")
-                continue
+                pw = frame.locator('input[type="password"]')
+                if pw.is_visible(timeout=5000):
+                    pw.fill(credentials["streamlit_pw"])
+                    frame.locator('button:has-text("Log in")').click()
+                    page.wait_for_timeout(12000)
+                    log("  🔑 Streamlit ingelogd.")
+            except:
+                pass  # Geen loginscherm = al ingelogd
             
-            # Wacht tot textarea zichtbaar is
+            # Tab-knop: optioneel, niet blocking
+            try:
+                tab = frame.locator('button:has-text("Test geschiktheid opdracht")')
+                if tab.is_visible(timeout=5000):
+                    tab.click()
+                    page.wait_for_timeout(3000)
+                    log("  🖱️ Tab geklikt.")
+            except:
+                pass
+            
+            # Textarea direct zoeken
             try:
                 ta = frame.locator('textarea').first
                 ta.wait_for(state="visible", timeout=30000)
