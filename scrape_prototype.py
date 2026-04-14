@@ -4,7 +4,7 @@ import io
 import time
 import subprocess
 import sys
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import streamlit as st
 from openpyxl import Workbook
@@ -117,18 +117,6 @@ div[data-testid="metric-container"] {
     overflow-y: auto;
     white-space: pre-wrap;
 }
-
-.badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    font-family: 'IBM Plex Mono', monospace;
-}
-.badge-green  { background-color: #1a4731; color: #3fb950; }
-.badge-yellow { background-color: #3d2f00; color: #d29922; }
-.badge-red    { background-color: #3d1a1a; color: #f85149; }
 
 .stSlider label {
     font-family: 'IBM Plex Mono', monospace;
@@ -453,88 +441,176 @@ def run_scraper(
         log(f"📋 Totaal {len(alle_urls)} opdrachten geselecteerd voor verwerking.")
         return alle_urls
 
-    def maak_streamlit_sessie(browser):
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(
-            "https://inthearenabv-cv-tool.streamlit.app/",
-            wait_until="domcontentloaded",
-            timeout=60000,
-        )
-        page.wait_for_timeout(20000)
-
-        frame = page.frame_locator("iframe").first
-
+    def veilige_inner_texts(locator) -> List[str]:
         try:
-            wachtwoord_veld = frame.locator('input[type="password"]').first
-            if wachtwoord_veld.is_visible(timeout=5000):
-                wachtwoord_veld.fill(credentials["streamlit_pw"])
-                frame.locator('button:has-text("Log in")').first.click()
-                page.wait_for_timeout(15000)
-                log("  🔑 Streamlit ingelogd.")
+            return locator.all_inner_texts()
         except Exception:
-            pass
+            return []
 
-        try:
-            tab = frame.locator('button:has-text("Test geschiktheid opdracht")').first
-            if tab.is_visible(timeout=5000):
-                tab.click()
-                page.wait_for_timeout(3000)
-                log("  🖱️ Tab geklikt.")
-        except Exception:
-            pass
-
-        frame.locator("textarea").first.wait_for(state="visible", timeout=30000)
-        log("  ✅ Streamlit-sessie klaar.")
-        return page
-
-    def analyseer_in_streamlit_vers(browser, tekst: str, max_retries: int = 2) -> List[tuple]:
+    def analyseer_in_streamlit_geisoleerd(
+        playwright_instance,
+        credentials_local: Dict[str, str],
+        tekst: str,
+        max_retries: int = 2,
+    ) -> List[Tuple[str, int]]:
         """
-        Opent voor elke opdracht een volledig nieuwe Streamlit-sessie,
-        voert analyse uit, leest resultaten uit en sluit de pagina direct weer.
+        Voor elke opdracht een volledig nieuwe browser + context + pagina.
+        Wacht op echte analyse-voltooiing in plaats van alleen op zichtbare resultaten.
         """
         for poging in range(1, max_retries + 1):
+            browser = None
+            context = None
             page = None
+
             try:
-                log(f"  🌐 Nieuwe Streamlit-sessie openen (poging {poging})...")
-                page = maak_streamlit_sessie(browser)
+                log(f"  🌐 Nieuwe geïsoleerde Streamlit-sessie openen (poging {poging})...")
+
+                browser = playwright_instance.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                    ],
+                )
+
+                context = browser.new_context(viewport={"width": 1280, "height": 900})
+                page = context.new_page()
+
+                page.goto(
+                    "https://inthearenabv-cv-tool.streamlit.app/",
+                    wait_until="domcontentloaded",
+                    timeout=60000,
+                )
+                page.wait_for_timeout(20000)
+
                 frame = page.frame_locator("iframe").first
+
+                try:
+                    wachtwoord_veld = frame.locator('input[type="password"]').first
+                    if wachtwoord_veld.is_visible(timeout=5000):
+                        wachtwoord_veld.fill(credentials_local["streamlit_pw"])
+                        frame.locator('button:has-text("Log in")').first.click()
+                        page.wait_for_timeout(12000)
+                        log("  🔑 Streamlit ingelogd.")
+                except Exception:
+                    pass
+
+                try:
+                    tab = frame.locator('button:has-text("Test geschiktheid opdracht")').first
+                    if tab.is_visible(timeout=5000):
+                        tab.click()
+                        page.wait_for_timeout(2500)
+                        log("  🖱️ Tab geklikt.")
+                except Exception:
+                    pass
 
                 textarea = frame.locator("textarea").first
                 textarea.wait_for(state="visible", timeout=30000)
+
+                # Oude resultaatinhoud vastleggen
+                oude_resultaat_tekst = "\n".join(
+                    veilige_inner_texts(frame.locator('[data-testid="stExpander"]'))
+                ).strip()
+
+                # Harde clear van textarea
                 textarea.click(timeout=10000)
+                try:
+                    page.keyboard.press("Control+A")
+                except Exception:
+                    pass
+                try:
+                    page.keyboard.press("Backspace")
+                except Exception:
+                    pass
+
+                page.wait_for_timeout(300)
                 textarea.fill("")
                 page.wait_for_timeout(300)
                 textarea.fill(tekst)
-                log("  ✍️ Tekst ingevuld.")
+                page.wait_for_timeout(800)
 
-                page.wait_for_timeout(1500)
+                # Verifiëren dat de textarea echt gevuld is
+                ingevulde_tekst = ""
+                try:
+                    ingevulde_tekst = textarea.input_value(timeout=5000)
+                except Exception:
+                    pass
+
+                if not ingevulde_tekst or len(ingevulde_tekst.strip()) < 50:
+                    raise Exception("Textarea lijkt niet correct gevuld.")
+
+                log("  ✍️ Tekst ingevuld.")
 
                 analyse_knop = frame.locator('button:has-text("Analyseer geschiktheid")').first
                 analyse_knop.wait_for(state="visible", timeout=10000)
                 analyse_knop.click()
                 log("  ⏳ Analyse gestart...")
 
-                # Wacht actief tot er echte kandidaatblokken zijn
-                start_tijd = time.time()
-                timeout_seconden = 90
-                aantal_expanders = 0
-
-                while time.time() - start_tijd < timeout_seconden:
+                # Stap 1: wacht of een spinner zichtbaar wordt
+                spinner_verschenen = False
+                start = time.time()
+                while time.time() - start < 15:
                     try:
-                        aantal_expanders = frame.locator('[data-testid="stExpander"]').count()
-                        if aantal_expanders > 0:
+                        spinner_count = frame.locator('[data-testid="stSpinner"]').count()
+                        if spinner_count > 0:
+                            spinner_verschenen = True
+                            log("  🔄 Spinner gedetecteerd.")
                             break
                     except Exception:
                         pass
-                    page.wait_for_timeout(1000)
+                    page.wait_for_timeout(500)
 
-                if aantal_expanders == 0:
-                    raise Exception("Geen kandidaat-resultaten gevonden binnen timeout.")
+                # Stap 2: als spinner zichtbaar was, wacht tot hij verdwijnt
+                if spinner_verschenen:
+                    start = time.time()
+                    while time.time() - start < 180:
+                        try:
+                            spinner_count = frame.locator('[data-testid="stSpinner"]').count()
+                            if spinner_count == 0:
+                                log("  ✅ Spinner verdwenen.")
+                                break
+                        except Exception:
+                            break
+                        page.wait_for_timeout(1000)
 
-                # Extra buffer zodat Streamlit echt klaar is met renderen
-                page.wait_for_timeout(3000)
+                # Stap 3: wacht tot resultaatinhoud verandert én stabiel wordt
+                laatste_tekst = ""
+                stabiele_teller = 0
+                nieuwe_resultaat_tekst = ""
 
-                resultaten = []
+                start = time.time()
+                while time.time() - start < 180:
+                    try:
+                        expanders = frame.locator('[data-testid="stExpander"]')
+                        aantal = expanders.count()
+
+                        if aantal > 0:
+                            huidige_tekst = "\n".join(veilige_inner_texts(expanders)).strip()
+
+                            if huidige_tekst and huidige_tekst != oude_resultaat_tekst:
+                                if huidige_tekst == laatste_tekst:
+                                    stabiele_teller += 1
+                                else:
+                                    stabiele_teller = 0
+
+                                laatste_tekst = huidige_tekst
+
+                                if stabiele_teller >= 2:
+                                    nieuwe_resultaat_tekst = huidige_tekst
+                                    break
+
+                    except Exception:
+                        pass
+
+                    page.wait_for_timeout(1200)
+
+                if not nieuwe_resultaat_tekst:
+                    raise Exception("Nieuwe resultaten zijn niet stabiel of niet vernieuwd binnen timeout.")
+
+                page.wait_for_timeout(1000)
+
+                resultaten: List[Tuple[str, int]] = []
                 aantal_expanders = frame.locator('[data-testid="stExpander"]').count()
 
                 for i in range(aantal_expanders):
@@ -542,12 +618,13 @@ def run_scraper(
                         blok = frame.locator('[data-testid="stExpander"]').nth(i)
 
                         try:
-                            blok.locator('summary, [data-testid="stExpanderToggleIcon"], button').first.click(timeout=5000)
-                            page.wait_for_timeout(500)
+                            blok.locator('summary, [data-testid="stExpanderToggleIcon"], button').first.click(timeout=3000)
+                            page.wait_for_timeout(300)
                         except Exception:
                             pass
 
                         blok_tekst = blok.inner_text(timeout=15000)
+
                         score_match = re.search(r'(\d+)/100', blok_tekst)
                         if not score_match:
                             continue
@@ -563,21 +640,33 @@ def run_scraper(
                         log(f"  ⚠️ Kandidaatblok fout: {e}")
 
                 if not resultaten:
-                    raise Exception("Wel analyse uitgevoerd, maar geen geldige kandidaatresultaten kunnen uitlezen.")
+                    raise Exception("Geen geldige kandidaten gevonden na analyse.")
 
                 return resultaten
 
             except Exception as e:
-                log(f"  ⚠️ Streamlit fout in verse sessie (poging {poging}/{max_retries}): {e}")
+                log(f"  ⚠️ Streamlit fout (poging {poging}/{max_retries}): {e}")
                 if poging == max_retries:
                     return []
+
             finally:
-                if page:
-                    try:
+                try:
+                    if page:
                         page.close()
-                        log("  📕 Streamlit-pagina gesloten.")
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
+                try:
+                    if context:
+                        context.close()
+                except Exception:
+                    pass
+                try:
+                    if browser:
+                        browser.close()
+                except Exception:
+                    pass
+
+                log("  📕 Geïsoleerde Streamlit-sessie gesloten.")
 
         return []
 
@@ -662,9 +751,11 @@ def run_scraper(
 
                         time.sleep(COOLDOWN_SECONDEN)
 
-                        kandidaten = analyseer_in_streamlit_vers(
-                            browser=batch_browser,
+                        kandidaten = analyseer_in_streamlit_geisoleerd(
+                            playwright_instance=p,
+                            credentials_local=credentials,
                             tekst=tekst,
+                            max_retries=2,
                         )
 
                         toegevoegde_kandidaten = set()
@@ -788,7 +879,7 @@ with st.sidebar:
         else:
             st.code(str(_playwright_status))
 
-    st.caption("v1.4 · In The Arena BV")
+    st.caption("v1.5 · In The Arena BV")
 
 # ─── Hoofd kolommen ───────────────────────────────────────────────────────────
 col_links, col_rechts = st.columns([3, 2], gap="large")
@@ -867,7 +958,7 @@ def render_resultaten():
 
 
 def render_log():
-    log_tekst = "\n".join(st.session_state.logs[-60:])
+    log_tekst = "\n".join(st.session_state.logs[-80:])
     log_placeholder.markdown(
         f"<div class='log-box'>{log_tekst}</div>",
         unsafe_allow_html=True,
