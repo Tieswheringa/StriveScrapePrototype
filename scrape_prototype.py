@@ -1,3 +1,4 @@
+import gc
 import os
 import re
 import io
@@ -13,6 +14,10 @@ from openpyxl.styles import Font, PatternFill, Alignment
 # Schrijfbare locatie op Streamlit Cloud
 PLAYWRIGHT_BROWSERS_DIR = "/tmp/pw-browsers"
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PLAYWRIGHT_BROWSERS_DIR
+
+# ─── Geheugen-pauze instellingen ──────────────────────────────────────────────
+MEMORY_COOLDOWN_INTERVAL = 10   # Pauze na elke N verwerkte opdrachten
+MEMORY_COOLDOWN_SECONDEN = 60   # Pauze-duur in seconden
 
 
 @st.cache_resource(show_spinner="Playwright-browsers installeren (eenmalig)...")
@@ -266,6 +271,30 @@ def run_scraper(
         for i in range(0, len(lst), size):
             yield lst[i:i + size]
 
+    def sluit_browser_veilig(browser, naam: str = "browser"):
+        """Sluit een browser-instantie veilig en log eventuele fouten."""
+        if browser is None:
+            return
+        try:
+            browser.close()
+            log(f"  📕 {naam} gesloten.")
+        except Exception as e:
+            log(f"  ⚠️ Fout bij sluiten {naam}: {e}")
+
+    def geheugen_opruimen(log_fn_inner, verwerkt: int):
+        """
+        Voer garbage collection uit en log de actie.
+        Wordt aangeroepen na elke MEMORY_COOLDOWN_INTERVAL opdrachten.
+        """
+        gc.collect()
+        log_fn_inner(
+            f"\n🧹 Geheugen vrijgemaakt na {verwerkt} opdrachten (gc.collect). "
+            f"Pauze van {MEMORY_COOLDOWN_SECONDEN}s om browsers volledig te laten sluiten...\n"
+        )
+        time.sleep(MEMORY_COOLDOWN_SECONDEN)
+        gc.collect()  # Tweede ronde na de pauze
+        log_fn_inner("▶️  Hervatten na geheugen-pauze.\n")
+
     def login_striive(page):
         log("🔐 Inloggen op Striive...")
         page.goto("https://login.striive.com/", wait_until="domcontentloaded", timeout=60000)
@@ -471,6 +500,16 @@ def run_scraper(
                         "--no-sandbox",
                         "--disable-dev-shm-usage",
                         "--disable-gpu",
+                        # ── Extra flags voor lagere geheugenbelasting ──
+                        "--disable-extensions",
+                        "--disable-background-networking",
+                        "--disable-sync",
+                        "--disable-translate",
+                        "--disable-default-apps",
+                        "--mute-audio",
+                        "--no-first-run",
+                        "--safebrowsing-disable-auto-update",
+                        "--js-flags=--max-old-space-size=256",
                     ],
                 )
 
@@ -508,12 +547,10 @@ def run_scraper(
                 textarea = frame.locator("textarea").first
                 textarea.wait_for(state="visible", timeout=30000)
 
-                # Oude resultaatinhoud vastleggen
                 oude_resultaat_tekst = "\n".join(
                     veilige_inner_texts(frame.locator('[data-testid="stExpander"]'))
                 ).strip()
 
-                # Harde clear van textarea
                 textarea.click(timeout=10000)
                 try:
                     page.keyboard.press("Control+A")
@@ -530,7 +567,6 @@ def run_scraper(
                 textarea.fill(tekst)
                 page.wait_for_timeout(800)
 
-                # Verifiëren dat de textarea echt gevuld is
                 ingevulde_tekst = ""
                 try:
                     ingevulde_tekst = textarea.input_value(timeout=5000)
@@ -547,7 +583,6 @@ def run_scraper(
                 analyse_knop.click()
                 log("  ⏳ Analyse gestart...")
 
-                # Stap 1: wacht of een spinner zichtbaar wordt
                 spinner_verschenen = False
                 start = time.time()
                 while time.time() - start < 15:
@@ -561,7 +596,6 @@ def run_scraper(
                         pass
                     page.wait_for_timeout(500)
 
-                # Stap 2: als spinner zichtbaar was, wacht tot hij verdwijnt
                 if spinner_verschenen:
                     start = time.time()
                     while time.time() - start < 180:
@@ -574,7 +608,6 @@ def run_scraper(
                             break
                         page.wait_for_timeout(1000)
 
-                # Stap 3: wacht tot resultaatinhoud verandert én stabiel wordt
                 laatste_tekst = ""
                 stabiele_teller = 0
                 nieuwe_resultaat_tekst = ""
@@ -650,8 +683,9 @@ def run_scraper(
                     return []
 
             finally:
+                # ── Gegarandeerd alles sluiten, ook bij fouten ─────────────
                 try:
-                    if page:
+                    if page and not page.is_closed():
                         page.close()
                 except Exception:
                     pass
@@ -663,8 +697,14 @@ def run_scraper(
                 try:
                     if browser:
                         browser.close()
+                        browser = None  # Expliciete verwijzing verbreken
                 except Exception:
                     pass
+
+                # Lokale verwijzingen wissen zodat GC ze kan ophalen
+                page = None
+                context = None
+                gc.collect()
 
                 log("  📕 Geïsoleerde Streamlit-sessie gesloten.")
 
@@ -698,11 +738,9 @@ def run_scraper(
             alle_urls = verzamel_opdracht_urls(init_page, stop_bij_link=laatst_verwerkte_link)
 
         finally:
-            try:
-                if init_browser:
-                    init_browser.close()
-            except Exception:
-                pass
+            sluit_browser_veilig(init_browser, "init-browser")
+            init_browser = None
+            gc.collect()
 
         if not alle_urls:
             log("⚠️ Geen nieuwe opdrachten gevonden om te verwerken.")
@@ -788,16 +826,21 @@ def run_scraper(
                         mislukte_urls.append(url)
 
             finally:
-                try:
-                    if batch_browser:
-                        batch_browser.close()
-                except Exception:
-                    pass
+                # ── Batch-browser gegarandeerd sluiten ────────────────────
+                sluit_browser_veilig(batch_browser, f"batch-browser-{batch_nummer}")
+                batch_browser = None
+                gc.collect()
 
                 log(f"📦 Batch {batch_nummer} afgesloten.")
 
                 if batch_done_fn:
                     batch_done_fn()
+
+            # ── Geheugen-pauze elke MEMORY_COOLDOWN_INTERVAL opdrachten ───
+            # Treedt op NA het sluiten van de batch-browser, zodat alle
+            # Chromium-processen al gestopt zijn vóór de pauze begint.
+            if verwerkt % MEMORY_COOLDOWN_INTERVAL == 0 and verwerkt < totaal:
+                geheugen_opruimen(log, verwerkt)
 
     if mislukte_urls:
         log(f"\n⚠️ {len(mislukte_urls)} opdrachten mislukt of overgeslagen.")
@@ -879,7 +922,7 @@ with st.sidebar:
         else:
             st.code(str(_playwright_status))
 
-    st.caption("v1.5 · In The Arena BV")
+    st.caption("v1.6 · In The Arena BV")
 
 # ─── Hoofd kolommen ───────────────────────────────────────────────────────────
 col_links, col_rechts = st.columns([3, 2], gap="large")
