@@ -5,7 +5,7 @@ import io
 import time
 import subprocess
 import sys
-import concurrent.futures
+import signal
 from typing import Callable, Dict, List, Optional, Tuple
 
 import streamlit as st
@@ -565,23 +565,28 @@ def run_scraper(
 
         return resultaten
 
-    # ── FIX 2: Wrapper met harde timeout via concurrent.futures ───────────────
     def analyseer_met_timeout(page, frame, tekst: str) -> List[Tuple[str, int]]:
         """
-        Voert analyseer_met_bestaande_pagina uit in een aparte thread met
-        een harde deadline van ANALYSE_TIMEOUT_SEC seconden.
+        Voert analyseer_met_bestaande_pagina uit in dezelfde thread (greenlet-safe)
+        met een harde deadline via SIGALRM (Linux-only, werkt op Streamlit Cloud).
         """
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(analyseer_met_bestaande_pagina, page, frame, tekst)
-            try:
-                return future.result(timeout=ANALYSE_TIMEOUT_SEC)
-            except concurrent.futures.TimeoutError:
-                log(f"  ⏰ Analyse-timeout ({ANALYSE_TIMEOUT_SEC}s). Opdracht overgeslagen.")
-                kill_chromium()
-                return []
-            except Exception as e:
-                log(f"  ⚠️ Analyse-fout: {e}")
-                return []
+        def _timeout_handler(signum, frame_):
+            raise TimeoutError(f"Analyse-timeout na {ANALYSE_TIMEOUT_SEC}s")
+    
+        oude_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(ANALYSE_TIMEOUT_SEC)
+        try:
+            return analyseer_met_bestaande_pagina(page, frame, tekst)
+        except TimeoutError as e:
+            log(f"  ⏰ {e}. Opdracht overgeslagen.")
+            kill_chromium()
+            return []
+        except Exception as e:
+            log(f"  ⚠️ Analyse-fout: {e}")
+            return []
+        finally:
+            signal.alarm(0)  # Timer altijd cancelen
+            signal.signal(signal.SIGALRM, oude_handler)  # Handler herstellen
 
     # ── Hoofd scraper loop ───────────────────────────────────────────────────
     alle_matches = []
