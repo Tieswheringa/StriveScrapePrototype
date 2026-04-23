@@ -5,7 +5,6 @@ import io
 import time
 import subprocess
 import sys
-import signal
 from typing import Callable, Dict, List, Optional, Tuple
 
 import streamlit as st
@@ -16,17 +15,15 @@ from openpyxl.styles import Font, PatternFill, Alignment
 PLAYWRIGHT_BROWSERS_DIR = "/tmp/pw-browsers"
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PLAYWRIGHT_BROWSERS_DIR
 
-# ─── Geheugen-pauze instellingen ──────────────────────────────────────────────
-MEMORY_COOLDOWN_INTERVAL = 5    # FIX 4: Was 10 → pauze na elke 5 opdrachten
-MEMORY_COOLDOWN_SECONDEN = 90   # FIX 4: Was 60 → meer tijd voor OS om processen te sluiten
-BATCH_GROOTTE = 3               # FIX 5: Was 5 → kleinere batches voor minder geheugendruk
-ANALYSE_TIMEOUT_SEC = 240       # FIX 2: Harde deadline per opdracht-analyse (4 minuten)
-COOLDOWN_SECONDEN = 3
+# ─── Instellingen ─────────────────────────────────────────────────────────────
+MEMORY_COOLDOWN_INTERVAL = 5    # Pauze na elke N opdrachten
+MEMORY_COOLDOWN_SECONDEN = 90   # Duur van de geheugen-pauze
+BATCH_GROOTTE = 3               # Opdrachten per batch
+COOLDOWN_SECONDEN = 3           # Wachttijd tussen opdrachten
 
 
-# ─── FIX 1: Forceer kill van alle achtergebleven Chromium-processen ───────────
+# ─── Chromium-processen forceren afsluiten ────────────────────────────────────
 def kill_chromium():
-    """Dood alle achtergebleven Chromium OS-processen die gc.collect() mist."""
     try:
         subprocess.run(["pkill", "-f", "chromium"], capture_output=True)
         time.sleep(1)
@@ -231,18 +228,32 @@ def run_scraper(
         except Exception as e:
             log(f"  ⚠️ Fout bij sluiten {naam}: {e}")
 
-    # ── FIX 4: Aangepaste geheugen-opruim functie met kill_chromium ───────────
-    def geheugen_opruimen(log_fn_inner, verwerkt: int):
+    def geheugen_opruimen(verwerkt: int):
         kill_chromium()
         gc.collect()
-        log_fn_inner(
+        log(
             f"\n🧹 Geheugen vrijgemaakt na {verwerkt} opdrachten. "
             f"Pauze van {MEMORY_COOLDOWN_SECONDEN}s...\n"
         )
         time.sleep(MEMORY_COOLDOWN_SECONDEN)
         gc.collect()
         kill_chromium()
-        log_fn_inner("▶️  Hervatten na geheugen-pauze.\n")
+        log("▶️  Hervatten na geheugen-pauze.\n")
+
+    CHROMIUM_ARGS = [
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-sync",
+        "--disable-translate",
+        "--disable-default-apps",
+        "--mute-audio",
+        "--no-first-run",
+        "--safebrowsing-disable-auto-update",
+        "--js-flags=--max-old-space-size=256",
+    ]
 
     def login_striive(page):
         log("🔐 Inloggen op Striive...")
@@ -405,9 +416,7 @@ def run_scraper(
         except Exception:
             return []
 
-    # ── FIX 3: Streamlit-browser hergebruiken per batch ───────────────────────
     def login_streamlit_eenmalig(page, frame):
-        """Login op Streamlit en klik de tab aan. Eenmalig per batch-sessie."""
         page.goto(
             "https://inthearenabv-cv-tool.streamlit.app/",
             wait_until="domcontentloaded",
@@ -434,15 +443,7 @@ def run_scraper(
         except Exception:
             pass
 
-    def analyseer_met_bestaande_pagina(
-        page,
-        frame,
-        tekst: str,
-    ) -> List[Tuple[str, int]]:
-        """
-        Analyseer één opdracht op een reeds geopende Streamlit-pagina.
-        Gooit een Exception bij elke fout zodat de aanroeper kan hervatten.
-        """
+    def analyseer_met_bestaande_pagina(page, frame, tekst: str) -> List[Tuple[str, int]]:
         textarea = frame.locator("textarea").first
         textarea.wait_for(state="visible", timeout=30000)
 
@@ -567,7 +568,7 @@ def run_scraper(
 
     def analyseer_met_timeout(page, frame, tekst: str) -> List[Tuple[str, int]]:
         """
-        Roept analyseer_met_bestaande_pagina direct aan.
+        Roept analyseer_met_bestaande_pagina direct aan (greenlet-safe).
         Ingebouwde Playwright-timeouts (30s, 120s) voorkomen eindeloos wachten.
         """
         try:
@@ -576,134 +577,125 @@ def run_scraper(
             log(f"  ⚠️ Analyse-fout: {e}")
             return []
 
-    # ── Hoofd scraper loop ───────────────────────────────────────────────────
+    # ─── Hoofd scraper loop ───────────────────────────────────────────────────
     alle_matches = []
     mislukte_urls = []
 
-    CHROMIUM_ARGS = [
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--disable-extensions",
-        "--disable-background-networking",
-        "--disable-sync",
-        "--disable-translate",
-        "--disable-default-apps",
-        "--mute-audio",
-        "--no-first-run",
-        "--safebrowsing-disable-auto-update",
-        "--js-flags=--max-old-space-size=256",
-    ]
-
-    # ── Stap 1: URLs verzamelen (aparte sync_playwright context) ──────────────
-alle_urls = []
-with sync_playwright() as p:
-    init_browser = None
-    try:
-        init_browser = p.chromium.launch(headless=True, args=CHROMIUM_ARGS)
-        init_page = init_browser.new_page(viewport={"width": 1280, "height": 800})
-        login_striive(init_page)
-        ga_naar_opdrachten(init_page)
-        alle_urls = verzamel_opdracht_urls(init_page, stop_bij_link=laatst_verwerkte_link)
-    finally:
-        sluit_browser_veilig(init_browser, "init-browser")
-        gc.collect()
-        kill_chromium()
-
-if not alle_urls:
-    log("⚠️ Geen nieuwe opdrachten gevonden.")
-    return []
-
-totaal = len(alle_urls)
-verwerkt = 0
-alle_matches = []
-mislukte_urls = []
-
-# ── Stap 2: Elke batch in een EIGEN sync_playwright context ───────────────
-for batch_nummer, batch_urls in enumerate(chunks(alle_urls, BATCH_GROOTTE), start=1):
-    log(f"\n📦 Start batch {batch_nummer} ({len(batch_urls)} opdrachten)")
-
-    with sync_playwright() as p:   # ← NIEUW: verse context per batch
-        batch_browser = None
-        streamlit_browser = None
-
+    # ── Stap 1: URLs verzamelen via tijdelijke init-browser ───────────────────
+    alle_urls = []
+    with sync_playwright() as p:
+        init_browser = None
         try:
-            batch_browser = p.chromium.launch(headless=True, args=CHROMIUM_ARGS)
-            batch_browser.on("disconnected", lambda: log(f"🔌 Batch-browser {batch_nummer} disconnected"))
-            striive_page = batch_browser.new_page(viewport={"width": 1280, "height": 800})
-            login_striive(striive_page)
-
-            streamlit_browser = p.chromium.launch(headless=True, args=CHROMIUM_ARGS)
-            streamlit_context = streamlit_browser.new_context(viewport={"width": 1280, "height": 900})
-            streamlit_page = streamlit_context.new_page()
-            streamlit_frame = streamlit_page.frame_locator("iframe").first
-
-            try:
-                login_streamlit_eenmalig(streamlit_page, streamlit_frame)
-                log(f"  🌐 Streamlit-sessie klaar voor batch {batch_nummer}.")
-            except Exception as e:
-                log(f"  ⚠️ Streamlit login mislukt: {e}")
-
-            for url in batch_urls:
-                verwerkt += 1
-                progress_fn(verwerkt, totaal)
-                log(f"\n[{verwerkt}/{totaal}] {url}")
-
-                try:
-                    striive_page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                    striive_page.wait_for_timeout(2000)
-                    tekst = striive_page.locator("app-job-request-details").inner_text(timeout=15000)
-
-                    uurtarief = extraheer_uurtarief(tekst)
-                    startdatum = extraheer_startdatum(tekst)
-                    deadline = extraheer_reageer_deadline(tekst)
-                    log(f"  💶 {uurtarief} | 📅 {startdatum} | ⏰ {deadline}")
-
-                    time.sleep(COOLDOWN_SECONDEN)
-
-                    kandidaten = analyseer_met_timeout(streamlit_page, streamlit_frame, tekst)
-
-                    toegevoegde_kandidaten = set()
-                    for naam, score in kandidaten:
-                        unieke_sleutel = (url, naam, score)
-                        if score > drempel and unieke_sleutel not in toegevoegde_kandidaten:
-                            toegevoegde_kandidaten.add(unieke_sleutel)
-                            alle_matches.append({
-                                "opdracht": f"Opdracht {verwerkt}",
-                                "naam": naam,
-                                "score": score,
-                                "uurtarief": uurtarief,
-                                "startdatum": startdatum,
-                                "deadline": deadline,
-                                "url": url,
-                            })
-                            log(f"  ✅ Match! {naam} ({score}/100) boven drempel {drempel}.")
-                            result_fn(alle_matches)
-
-                except Exception as e:
-                    log(f"  ⚠️ Opdracht overgeslagen: {e}")
-                    mislukte_urls.append(url)
-                    continue
-
-        except Exception as e:
-            log(f"❌ Batch {batch_nummer} gecrasht: {e}")
-            for url in batch_urls:
-                if url not in mislukte_urls:
-                    mislukte_urls.append(url)
-
+            init_browser = p.chromium.launch(headless=True, args=CHROMIUM_ARGS)
+            init_page = init_browser.new_page(viewport={"width": 1280, "height": 800})
+            init_page.on("crash", lambda: log("💥 Init-page crash"))
+            login_striive(init_page)
+            ga_naar_opdrachten(init_page)
+            alle_urls = verzamel_opdracht_urls(init_page, stop_bij_link=laatst_verwerkte_link)
         finally:
-            sluit_browser_veilig(streamlit_browser, f"streamlit-browser-{batch_nummer}")
-            sluit_browser_veilig(batch_browser, f"batch-browser-{batch_nummer}")
+            sluit_browser_veilig(init_browser, "init-browser")
             gc.collect()
             kill_chromium()
-            log(f"📦 Batch {batch_nummer} afgesloten + Chromium opgeruimd.")
 
-            if batch_done_fn:
-                batch_done_fn()
+    if not alle_urls:
+        log("⚠️ Geen nieuwe opdrachten gevonden.")
+        return []
 
-    # Geheugen-pauze (buiten de with-context, Playwright-server is al gestopt)
-    if verwerkt % MEMORY_COOLDOWN_INTERVAL == 0 and verwerkt < totaal:
-        geheugen_opruimen(log, verwerkt)
+    totaal = len(alle_urls)
+    verwerkt = 0
+
+    # ── Stap 2: Elke batch in een eigen sync_playwright context ───────────────
+    for batch_nummer, batch_urls in enumerate(chunks(alle_urls, BATCH_GROOTTE), start=1):
+        log(f"\n📦 Start batch {batch_nummer} ({len(batch_urls)} opdrachten)")
+
+        with sync_playwright() as p:
+            batch_browser = None
+            streamlit_browser = None
+            streamlit_context = None
+            striive_page = None
+            streamlit_page = None
+
+            try:
+                # Striive-browser voor deze batch
+                batch_browser = p.chromium.launch(headless=True, args=CHROMIUM_ARGS)
+                batch_browser.on("disconnected", lambda: log(f"🔌 Batch-browser {batch_nummer} disconnected"))
+                striive_page = batch_browser.new_page(viewport={"width": 1280, "height": 800})
+                striive_page.on("crash", lambda: log(f"💥 Striive-page crash batch {batch_nummer}"))
+                login_striive(striive_page)
+
+                # Streamlit-browser eenmalig openen per batch
+                streamlit_browser = p.chromium.launch(headless=True, args=CHROMIUM_ARGS)
+                streamlit_context = streamlit_browser.new_context(viewport={"width": 1280, "height": 900})
+                streamlit_page = streamlit_context.new_page()
+                streamlit_frame = streamlit_page.frame_locator("iframe").first
+
+                try:
+                    login_streamlit_eenmalig(streamlit_page, streamlit_frame)
+                    log(f"  🌐 Streamlit-sessie klaar voor batch {batch_nummer}.")
+                except Exception as e:
+                    log(f"  ⚠️ Streamlit login mislukt voor batch {batch_nummer}: {e}")
+
+                # Opdrachten in deze batch verwerken
+                for url in batch_urls:
+                    verwerkt += 1
+                    progress_fn(verwerkt, totaal)
+                    log(f"\n[{verwerkt}/{totaal}] {url}")
+
+                    try:
+                        striive_page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                        striive_page.wait_for_timeout(2000)
+                        tekst = striive_page.locator("app-job-request-details").inner_text(timeout=15000)
+
+                        uurtarief = extraheer_uurtarief(tekst)
+                        startdatum = extraheer_startdatum(tekst)
+                        deadline = extraheer_reageer_deadline(tekst)
+                        log(f"  💶 {uurtarief} | 📅 {startdatum} | ⏰ {deadline}")
+
+                        time.sleep(COOLDOWN_SECONDEN)
+
+                        kandidaten = analyseer_met_timeout(streamlit_page, streamlit_frame, tekst)
+
+                        toegevoegde_kandidaten = set()
+                        for naam, score in kandidaten:
+                            unieke_sleutel = (url, naam, score)
+                            if score > drempel and unieke_sleutel not in toegevoegde_kandidaten:
+                                toegevoegde_kandidaten.add(unieke_sleutel)
+                                alle_matches.append({
+                                    "opdracht": f"Opdracht {verwerkt}",
+                                    "naam": naam,
+                                    "score": score,
+                                    "uurtarief": uurtarief,
+                                    "startdatum": startdatum,
+                                    "deadline": deadline,
+                                    "url": url,
+                                })
+                                log(f"  ✅ Match! {naam} ({score}/100) boven drempel {drempel}.")
+                                result_fn(alle_matches)
+
+                    except Exception as e:
+                        log(f"  ⚠️ Opdracht overgeslagen: {e}")
+                        mislukte_urls.append(url)
+                        continue
+
+            except Exception as e:
+                log(f"❌ Batch {batch_nummer} gecrasht: {e}")
+                for url in batch_urls:
+                    if url not in mislukte_urls:
+                        mislukte_urls.append(url)
+
+            finally:
+                sluit_browser_veilig(streamlit_browser, f"streamlit-browser-{batch_nummer}")
+                sluit_browser_veilig(batch_browser, f"batch-browser-{batch_nummer}")
+                gc.collect()
+                kill_chromium()
+                log(f"📦 Batch {batch_nummer} afgesloten + Chromium opgeruimd.")
+
+                if batch_done_fn:
+                    batch_done_fn()
+
+        # Geheugen-pauze buiten de with-context (Playwright-server is al gestopt)
+        if verwerkt % MEMORY_COOLDOWN_INTERVAL == 0 and verwerkt < totaal:
+            geheugen_opruimen(verwerkt)
 
     if mislukte_urls:
         log(f"\n⚠️ {len(mislukte_urls)} opdrachten mislukt of overgeslagen.")
@@ -781,7 +773,7 @@ with st.sidebar:
         else:
             st.code(str(_playwright_status))
 
-    st.caption("v2.0 · In The Arena BV")
+    st.caption("v2.1 · In The Arena BV")
 
 # ─── Hoofd kolommen ───────────────────────────────────────────────────────────
 col_links, col_rechts = st.columns([3, 2], gap="large")
