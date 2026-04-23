@@ -567,26 +567,14 @@ def run_scraper(
 
     def analyseer_met_timeout(page, frame, tekst: str) -> List[Tuple[str, int]]:
         """
-        Voert analyseer_met_bestaande_pagina uit in dezelfde thread (greenlet-safe)
-        met een harde deadline via SIGALRM (Linux-only, werkt op Streamlit Cloud).
+        Roept analyseer_met_bestaande_pagina direct aan.
+        Ingebouwde Playwright-timeouts (30s, 120s) voorkomen eindeloos wachten.
         """
-        def _timeout_handler(signum, frame_):
-            raise TimeoutError(f"Analyse-timeout na {ANALYSE_TIMEOUT_SEC}s")
-    
-        oude_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(ANALYSE_TIMEOUT_SEC)
         try:
             return analyseer_met_bestaande_pagina(page, frame, tekst)
-        except TimeoutError as e:
-            log(f"  ⏰ {e}. Opdracht overgeslagen.")
-            kill_chromium()
-            return []
         except Exception as e:
             log(f"  ⚠️ Analyse-fout: {e}")
             return []
-        finally:
-            signal.alarm(0)  # Timer altijd cancelen
-            signal.signal(signal.SIGALRM, oude_handler)  # Handler herstellen
 
     # ── Hoofd scraper loop ───────────────────────────────────────────────────
     alle_matches = []
