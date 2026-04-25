@@ -204,7 +204,8 @@ def maak_excel(matches: List[dict]) -> bytes:
 def run_scraper(
     credentials: Dict[str, str],
     drempel: int,
-    laatst_verwerkte_link: str,
+    start_bij_link: str,
+    stop_bij_link: str,
     log_fn: Callable[[str], None],
     progress_fn: Callable[[int, int], None],
     result_fn: Callable[[List[dict]], None],
@@ -326,15 +327,24 @@ def run_scraper(
         page.wait_for_timeout(2000)
         log("✅ Opdrachtenpagina geladen.")
 
-    def verzamel_opdracht_urls(page, stop_bij_link: Optional[str] = None) -> List[str]:
+    def verzamel_opdracht_urls(
+        page,
+        start_bij_link: Optional[str] = None,
+        stop_bij_link: Optional[str] = None,
+    ) -> List[str]:
+        start_bij_link_norm = normaliseer_url(start_bij_link)
         stop_bij_link_norm = normaliseer_url(stop_bij_link)
+        gebruik_start_link = bool(start_bij_link_norm)
         gebruik_stop_link = bool(stop_bij_link_norm)
 
+        if gebruik_start_link:
+            log(f"▶️  Start-link ingesteld: {start_bij_link_norm}")
         if gebruik_stop_link:
             log(f"⛔ Stop-link ingesteld: {stop_bij_link_norm}")
-        else:
+        if not gebruik_start_link and not gebruik_stop_link:
             log("🔍 Alle opdracht-URLs verzamelen via scrollen...")
 
+        # Verzamel eerst alle URLs (we moeten de volledige lijst kennen om te knippen)
         alle_urls = []
         gevonden_set = set()
         stop_link_gevonden = False
@@ -363,7 +373,7 @@ def run_scraper(
 
                     if volledige_href_norm == stop_bij_link_norm and gebruik_stop_link:
                         stop_link_gevonden = True
-                        log("🛑 Laatst verwerkte link bereikt.")
+                        log("🛑 Stop-link bereikt.")
                         break
 
                     if volledige_href_norm not in gevonden_set:
@@ -401,14 +411,28 @@ def run_scraper(
 
             max_scroll = res["scrollHeight"] - res["clientHeight"]
             if max_scroll > 0 and res["scrollTop"] >= max_scroll - 10:
-                log(f"📋 Einde van lijst bereikt. Totaal: {len(alle_urls)} opdrachten.")
+                log(f"📋 Einde van lijst bereikt. Totaal: {len(alle_urls)} gevonden.")
                 break
 
         if gebruik_stop_link and not stop_link_gevonden:
-            log("⚠️ Stop-link niet gevonden. Alle gevonden opdrachten worden verwerkt.")
+            log("⚠️ Stop-link niet gevonden in de lijst.")
 
-        log(f"📋 Totaal {len(alle_urls)} opdrachten geselecteerd.")
-        return alle_urls
+        # ── Snij de lijst bij op basis van start- en/of stop-link ────────────
+        start_index = 0
+        if gebruik_start_link:
+            try:
+                start_index = alle_urls.index(start_bij_link_norm)
+                log(f"▶️  Start-link gevonden op positie {start_index + 1}.")
+            except ValueError:
+                log("⚠️ Start-link niet gevonden. Verwerking begint vanaf het begin.")
+                start_index = 0
+
+        geselecteerd = alle_urls[start_index:]
+
+        # Als stop-link gevonden is, zijn de URLs tot aan de stop al geselecteerd
+        # (stop-link zelf is niet toegevoegd aan alle_urls, dus de lijst eindigt correct)
+        log(f"📋 Totaal {len(geselecteerd)} opdrachten geselecteerd.")
+        return geselecteerd
 
     def veilige_inner_texts(locator) -> List[str]:
         try:
@@ -591,7 +615,11 @@ def run_scraper(
             init_page.on("crash", lambda: log("💥 Init-page crash"))
             login_striive(init_page)
             ga_naar_opdrachten(init_page)
-            alle_urls = verzamel_opdracht_urls(init_page, stop_bij_link=laatst_verwerkte_link)
+            alle_urls = verzamel_opdracht_urls(
+                init_page,
+                start_bij_link=start_bij_link,
+                stop_bij_link=stop_bij_link,
+            )
         finally:
             sluit_browser_veilig(init_browser, "init-browser")
             gc.collect()
@@ -743,17 +771,32 @@ with st.sidebar:
     streamlit_pw = st.text_input("Streamlit wachtwoord", type="password", value="InTheArenaBV")
 
     st.markdown("---")
-    st.markdown("### 🧷 Laatst verwerkte opdracht")
-    laatst_verwerkte_link = st.text_input(
-        "Link van de meest recent behandelde opdracht",
+    st.markdown("### 🧷 Bereik instellen")
+    start_bij_link = st.text_input(
+        "Beginopdracht (inclusief)",
         value="",
-        placeholder="https://supplier.striive.com/job-requests/...",
+        placeholder="https://supplier.striive.com/inbox/all/...",
         help=(
-            "Plak hier de link van de laatst verwerkte opdracht. "
-            "Alleen opdrachten boven deze link worden meegenomen. "
-            "Laat leeg om alles te scannen."
+            "Plak hier de link van de opdracht waarmee je wilt beginnen. "
+            "Laat leeg om vanaf de eerste opdracht te starten."
         ),
     )
+    stop_bij_link = st.text_input(
+        "Eindopdracht (exclusief)",
+        value="",
+        placeholder="https://supplier.striive.com/inbox/all/...",
+        help=(
+            "Plak hier de link van de opdracht waarbij je wilt stoppen (deze wordt niet meer meegenomen). "
+            "Laat leeg om tot de laatste opdracht door te gaan."
+        ),
+    )
+    if start_bij_link or stop_bij_link:
+        st.caption(
+            f"📌 Bereik: "
+            f"{'vanaf opgegeven start' if start_bij_link else 'begin'}"
+            f" → "
+            f"{'t/m opgegeven stop' if stop_bij_link else 'einde'}"
+        )
 
     st.markdown("---")
     st.markdown("### ⚙️ Instellingen")
@@ -920,7 +963,8 @@ if start_knop:
             matches = run_scraper(
                 credentials=credentials,
                 drempel=drempel,
-                laatst_verwerkte_link=laatst_verwerkte_link,
+                start_bij_link=start_bij_link,
+                stop_bij_link=stop_bij_link,
                 log_fn=log_fn,
                 progress_fn=progress_fn,
                 result_fn=result_fn,
