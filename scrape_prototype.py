@@ -15,10 +15,10 @@ from openpyxl.styles import Font, PatternFill, Alignment
 PLAYWRIGHT_BROWSERS_DIR = "/tmp/pw-browsers"
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PLAYWRIGHT_BROWSERS_DIR
 
-# ─── Instellingen ─────────────────────────────────────────────────────────────
-MEMORY_COOLDOWN_INTERVAL = 5    # Pauze na elke N opdrachten
-MEMORY_COOLDOWN_SECONDEN = 90   # Duur van de geheugen-pauze
-BATCH_GROOTTE = 3               # Opdrachten per batch
+# ─── Instellingen (defaults, overschrijfbaar via sidebar) ────────────────────
+MEMORY_COOLDOWN_INTERVAL = 3    # Pauze na elke N opdrachten (was 5)
+MEMORY_COOLDOWN_SECONDEN = 300  # Duur van de geheugen-pauze in seconden (was 90)
+BATCH_GROOTTE = 2               # Opdrachten per batch (was 3)
 COOLDOWN_SECONDEN = 3           # Wachttijd tussen opdrachten
 
 
@@ -206,6 +206,9 @@ def run_scraper(
     drempel: int,
     start_bij_link: str,
     stop_bij_link: str,
+    batch_grootte: int,
+    pauze_interval: int,
+    pauze_duur_seconden: int,
     log_fn: Callable[[str], None],
     progress_fn: Callable[[int, int], None],
     result_fn: Callable[[List[dict]], None],
@@ -234,9 +237,9 @@ def run_scraper(
         gc.collect()
         log(
             f"\n🧹 Geheugen vrijgemaakt na {verwerkt} opdrachten. "
-            f"Pauze van {MEMORY_COOLDOWN_SECONDEN}s...\n"
+            f"Pauze van {pauze_duur_seconden}s ({pauze_duur_seconden // 60}m)...\n"
         )
-        time.sleep(MEMORY_COOLDOWN_SECONDEN)
+        time.sleep(pauze_duur_seconden)
         gc.collect()
         kill_chromium()
         log("▶️  Hervatten na geheugen-pauze.\n")
@@ -633,7 +636,7 @@ def run_scraper(
     verwerkt = 0
 
     # ── Stap 2: Elke batch in een eigen sync_playwright context ───────────────
-    for batch_nummer, batch_urls in enumerate(chunks(alle_urls, BATCH_GROOTTE), start=1):
+    for batch_nummer, batch_urls in enumerate(chunks(alle_urls, batch_grootte), start=1):
         log(f"\n📦 Start batch {batch_nummer} ({len(batch_urls)} opdrachten)")
 
         with sync_playwright() as p:
@@ -722,7 +725,7 @@ def run_scraper(
                     batch_done_fn()
 
         # Geheugen-pauze buiten de with-context (Playwright-server is al gestopt)
-        if verwerkt % MEMORY_COOLDOWN_INTERVAL == 0 and verwerkt < totaal:
+        if verwerkt % pauze_interval == 0 and verwerkt < totaal:
             geheugen_opruimen(verwerkt)
 
     if mislukte_urls:
@@ -807,6 +810,25 @@ with st.sidebar:
     )
 
     st.markdown("---")
+    st.markdown("### 🛠️ Geavanceerd")
+    batch_grootte = st.slider(
+        "Opdrachten per batch",
+        min_value=1, max_value=5, value=2, step=1,
+        help="Kleinere batches = minder geheugengebruik per cyclus. Aanbevolen: 2.",
+    )
+    pauze_interval = st.slider(
+        "Pauze na elke N opdrachten",
+        min_value=2, max_value=10, value=3, step=1,
+        help="Hoe vaak er een geheugen-pauze wordt ingepland.",
+    )
+    pauze_duur = st.slider(
+        "Duur van geheugen-pauze (minuten)",
+        min_value=1, max_value=15, value=5, step=1,
+        help="Hoe lang de pauze duurt om geheugen vrij te maken. Bij crashes rond opdracht 20: probeer 8-10 minuten.",
+    )
+    pauze_duur_seconden = pauze_duur * 60
+
+    st.markdown("---")
     if isinstance(_playwright_status, dict) and _playwright_status.get("returncode") == 0:
         st.success("✅ Playwright Chromium klaar.", icon="✅")
     else:
@@ -816,7 +838,7 @@ with st.sidebar:
         else:
             st.code(str(_playwright_status))
 
-    st.caption("v2.1 · In The Arena BV")
+    st.caption("v2.2 · In The Arena BV")
 
 # ─── Hoofd kolommen ───────────────────────────────────────────────────────────
 col_links, col_rechts = st.columns([3, 2], gap="large")
@@ -965,6 +987,9 @@ if start_knop:
                 drempel=drempel,
                 start_bij_link=start_bij_link,
                 stop_bij_link=stop_bij_link,
+                batch_grootte=batch_grootte,
+                pauze_interval=pauze_interval,
+                pauze_duur_seconden=pauze_duur_seconden,
                 log_fn=log_fn,
                 progress_fn=progress_fn,
                 result_fn=result_fn,
